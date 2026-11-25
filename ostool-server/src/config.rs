@@ -127,6 +127,10 @@ impl ServerConfig {
             !self.edition.is_public() || self.listen_addr.ip().is_loopback(),
             "public user API must use a loopback listener behind the HTTPS gateway"
         );
+        anyhow::ensure!(
+            !self.security.dev_registration_codes || self.listen_addr.ip().is_loopback(),
+            "development registration codes require a loopback API listener"
+        );
         self.tftp.validate_for_edition(self.edition)?;
         if let Some(addr) = self.http_boot.listen_addr {
             anyhow::ensure!(

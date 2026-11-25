@@ -76,17 +76,18 @@ heartbeats cannot keep a failed serial session allocated.
 
 ## Deployment and configuration
 
-The only runtime configuration source is `.env` (with process variables overriding
-values when launching the binary directly). Copy [.env.example](.env.example) once
-to `.env`, set its values, and keep it private. `.env.example` is a template, never
-loaded by the server. No server TOML is generated or loaded. Both React apps read
+Startup configuration comes from the selected `.env` file (with process variables
+overriding values when launching the binary directly). Use [.env.deploy](.env.deploy)
+for deployment or [.env.dev](.env.dev) for local debugging. Both are checked-in examples
+with credential placeholders: copy the appropriate file to the ignored `.env`, fill
+its values, and keep real credentials private. Examples are not loaded automatically. No server TOML is generated or loaded. Both React apps read
 runtime configuration through the API and need no separate environment file.
 Editable inventory, users, rentals and business settings remain in PostgreSQL.
 
 Use the unified deployment script from a repository checkout:
 
 ```bash
-cp ostool-server/.env.example ostool-server/.env
+cp ostool-server/.env.deploy ostool-server/.env
 chmod 600 ostool-server/.env
 # Edit the single .env before deploying.
 ostool-server/scripts/deploy.sh docker check
@@ -169,12 +170,12 @@ device management need no login. Public board requests require Bearer credential
 and retain role, rental and session ownership checks; the management console
 requires its separate administrator login. The CLI's manual `auth_mode` selects
 whether it sends credentials; it cannot disable authentication on a public server.
-See the [deployment/API comparison](../docs/api.md#两种部署共用的契约).
+See the [deployment/API comparison](docs/api.md#两种部署共用的契约).
 
 The frontend reads the edition at runtime, so the same binary serves either
 edition. Configuration precedence is process environment, then the selected
 `.env` file, then built-in defaults. Without `--env-file`, the server reads `.env` from its
-working directory. See [single environment template](.env.example) and
+working directory. See the [deployment example](.env.deploy), [local debugging example](.env.dev) and
 [public deployment](#public-deployment).
 
 Board inventory, DTB content, OTA images/jobs/observations and editable
@@ -262,7 +263,7 @@ response body internally; management API/SSE projections use safe messages. `409
 waits for state, capability or epoch to change without repeated PUTs. Network
 errors and other `5xx` responses use finite retries with backoff; uncertain
 results, including the final attempt, require a fresh device-status check before
-failure. See [loader upgrades](../docs/axloader-network-control.md#22-装载器升级)
+failure. See [loader upgrades](docs/axloader-network-control.md#22-装载器升级)
 for the device protocol and confirmation rules.
 
 ## Network throughput tests
@@ -270,8 +271,8 @@ for the device protocol and confirmation rules.
 `OSTOOL_NETWORK_TEST_ENABLED=false` is the deployment default. The authenticated listener defaults to `127.0.0.1:3000`; `/v1/tests` is forwarded through HTTPS by the supplied Caddy templates. If its port is changed, update the existing gateway route to match. To enable the
 hardware-network throughput listener, set it to `true`; its address, active test
 limit and duration limit use the `OSTOOL_NETWORK_TEST_*` keys documented in
-`.env.example`. Keep this listener on loopback behind the authenticated HTTPS gateway. See the
-[API guide](../docs/api.md) for transfer semantics and client commands.
+the optional comments in `.env.deploy` and `.env.dev`. Keep this listener on loopback behind the authenticated HTTPS gateway. See the
+[API guide](docs/api.md) for transfer semantics and client commands.
 
 ## Local development environment
 
@@ -280,8 +281,9 @@ container build installs the declared Rust,
 Node.js 24 and pnpm 10.33.0 tools; no host Rust/Node installation is needed.
 
 ```bash
-cp ostool-server/.env.example ostool-server/.env
-# Edit .env for your addresses, passwords and feature edition first.
+cp ostool-server/.env.dev ostool-server/.env
+chmod 600 ostool-server/.env
+# Replace both database-password placeholders, generate the root key, and set the admin password.
 ostool-server/scripts/dev.sh start
 ostool-server/scripts/dev.sh status
 ostool-server/scripts/dev.sh build
@@ -289,12 +291,30 @@ ostool-server/scripts/dev.sh restart
 ostool-server/scripts/dev.sh stop
 ```
 
+The debugging example defaults to the public edition, `https://localhost:8443`,
+a loopback API on port 3999, PostgreSQL on 54339 and Redis on 56390, with an
+`ostool_dev` schema/cache namespace. This exercises the real login/registration
+flow without a production domain. After first startup, run `scripts/dev.sh cert`
+and trust the exported CA on the browser/CLI machine. For anonymous hardware
+work, change the edition to `local` and the public origin to `http://127.0.0.1:3999`.
+Business settings remain in the console; enable registration verification and the
+debug registration-code setting there when needed.
+
+The deployment example uses `/var/lib/ostool-server`, a placeholder public domain,
+production bootstrap credentials and the normal loopback service ports. Replace
+the domain/email and credential placeholders before use. Use URL-safe passwords
+or URL-encode the password in the database URL; it must match the Docker database
+initialization password. Preserve the existing password for reused database volumes
+and keep the root key stable across deployments. Native installations use their
+existing PostgreSQL/Redis connection URLs and Caddy service.
+
 The independent Docker-only launcher runs the same release binary as deployment,
 together with PostgreSQL/Redis and a standard Caddy container. It has no development authentication/origin bypass or simulated
 runtime. `start` and `restart` build current source, apply Compose configuration and
 reload the development gateway configuration;
 `build` only builds the image. `stop` removes backend/database/cache containers and retains named data
-volumes. It never changes systemd or `/etc/ostool-server`. Containers use the Compose
+volumes. It never changes systemd or `/etc/ostool-server`. Certificates are exported to `ostool-server/.ostool-server-dev/root.crt`.
+Containers use the Compose
 project name `ostool-server`; both feature editions share the same data volumes.
 
 The launcher calls Compose directly and never calls `deploy.sh`, systemd or sudo.
@@ -414,7 +434,7 @@ details and the maintenance notice; these groups share one save action. Terms an
 privacy policies retain their independent tabs and publication histories.
 All updates use SSE, preserving drafts, focus and scroll position. Configuration
 conflicts require explicit resolution. See the
-[management interface and event protocol](../docs/admin-ui.md).
+[management interface and event protocol](docs/admin-ui.md).
 
 The dashboard provides runtime health (`/qcl/overview`), background tasks
 (`/qcl/jobs`) and operational metrics (`/qcl/operations`). Resource and service
@@ -429,9 +449,10 @@ user/role/rental operations. Mutations record an intent before execution; audit
 storage failure returns 503 without executing the action. If result recording
 fails, the intent remains pending and the response includes
 `X-Audit-Status: pending`. Credentials, raw request bodies, file contents and power
-commands are excluded. `OSTOOL_AUDIT_RETENTION_DAYS=0` retains all records;
-`1..3650` enables hourly cleanup. Pending intents are retained. API/filter details
-are in [the API reference](../docs/api.md).
+commands are excluded. Configure retention under **System settings → Network and uploads →
+Audit retention**: `0` retains all records; `1..3650` enables hourly cleanup using
+the latest saved policy. Changes require `audits.manage` in public deployments. Pending intents are retained. API/filter details
+are in [the API reference](docs/api.md).
 
 System settings manage branding, contacts, filing information, maintenance
 notices, versioned user agreements and privacy policies. Public settings update
@@ -451,7 +472,7 @@ sessions are bound to that rental and cannot extend its deadline through
 heartbeats. Expiry/cancellation uses normal serial shutdown, power-off and file
 cleanup; the next user must wait for physical release. Administrators retain
 maintenance access. Frontend workflows and calendar behavior are documented in
-[the management guide](../docs/admin-ui.md).
+[the management guide](docs/admin-ui.md).
 
 Growing user, rental, application, audit and lease-history lists use database
 pagination (default 20, maximum 100 rows), including personal workspace lists.
@@ -523,14 +544,75 @@ version. Unrelated settings updates do not replace a document draft. Site contac
 also include support hours and a separate privacy email, falling back to the
 support email when empty.
 
+### Startup configuration and system settings
+
+`.env` contains only dependencies needed before the server can open its runtime
+settings: edition, API listener/data directory, PostgreSQL/Redis connections and
+cache namespace, root encryption key, first-admin bootstrap, external origins and
+trusted proxies, plus separately bound hardware/test listeners and QEMU process
+resources. Container database/serial mount variables also stay in the startup file.
+The root key cannot be stored in the database that it decrypts.
+
+System settings own mail, CAPTCHA, registration/recovery/MFA policies, session and
+rate limits, administrator network restrictions, local registration previews,
+audit retention, network-interface selection, upload budgets and TFTP configuration.
+Saving updates PostgreSQL and SSE; business values are not imported from or
+overridden by `.env`. Retention workers read the latest policy on each hourly run.
+Startup rejects the removed business environment keys by name, without printing
+values. Remove those keys from old deployment files and manage them in the console.
+
+SMTP username/API Key, SMTP password/Secret Key and Turnstile Secret Key are encrypted
+with separate field contexts and displayed only as **Configured/Not configured**.
+Inputs remain empty after save or reload; omitting or leaving a value empty preserves
+it, explicit clear flags delete it, and replace+clear conflicts are rejected.
+Only the current settings record format is accepted. Startup does not migrate
+plaintext credentials, import old records or fill missing credential envelopes.
+Old settings must be converted offline before upgrading; malformed records fail
+without being rewritten.
+
 ### Security configuration
 
-Public browser login/registration use one-shot image CAPTCHA by default, bound
-to purpose, source and browser identity, with a 120-second lifetime. Every attempt
-consumes the challenge. `OSTOOL_CAPTCHA_PROVIDER=turnstile` requires all three
-Turnstile settings in the management console; hostname and action are checked.
-There is no CAPTCHA bypass switch. Email verification is optional and defaults
-to `OSTOOL_REGISTRATION_EMAIL_VERIFICATION=false`.
+Public browser login, administrator login, registration-email sending and password
+recovery share two human-verification providers, selectable under **System settings →
+Login and security**:
+
+- **Local image CAPTCHA (custom)**: the server generates randomized PNG images;
+  no external verification service is needed. Challenges last 120 seconds.
+- **Cloudflare Turnstile**: use a Managed widget, set its public Site Key, encrypted
+  Secret Key, and an explicit hostname allowlist covering the website and console.
+  The root settings-encryption key must be configured before saving the secret.
+  Hostnames accept spaces, newlines and English/Chinese commas; values are lowercased
+  and deduplicated. URLs, ports, wildcards and invalid DNS labels are rejected.
+  Challenges last 300 seconds; tokens are validated server-side with action,
+  hostname and the challenge UUID in `cdata`, following the
+  [Cloudflare validation contract](https://developers.cloudflare.com/turnstile/get-started/server-side-validation/).
+
+Save the configuration, then use **Test saved configuration** in the same page to
+complete a real challenge. The test works with either provider and requires
+`security.manage`; its challenge cannot authorize login or registration. Public
+clients cannot request the `configuration_test` action. The UI tests saved values,
+keeps configuration drafts intact, and refreshes the test after a settings revision.
+Cloudflare script loads have a 15-second timeout and can be retried; expiration,
+widget timeout, unsupported browsers and network/configuration errors clear the proof.
+CSP allows the official Cloudflare widget on public pages so switching providers
+in the console works without reloading the application.
+
+Every challenge is one-shot and bound to purpose, source IP, User-Agent and current
+provider/key/hostname configuration. Wrong, empty, oversized or replayed answers
+consume the challenge; provider/key/allowlist changes invalidate outstanding proofs.
+Issuance defaults to 20 challenges per IP/action/minute and 60 per IP/minute across
+all actions; verification has a shared 60/IP/minute budget. Admin test issuance and
+verification each allow five/IP/minute. Redis failures deny verification. The local
+registration-code preview does not disable human verification. There is no bypass
+switch or automatic fallback when Cloudflare is unavailable.
+
+Human verification is configured only through system settings; the startup
+environment does not accept provider, site-key, secret-key or hostname overrides. Cloudflare
+[dummy keys](https://developers.cloudflare.com/turnstile/troubleshooting/testing/)
+do not return action/cdata, so they cannot pass this application's strict binding
+checks; test the complete widget with real keys for your allowed hostname, or use
+the local image provider for offline development. Email verification is optional
+and defaults to `OSTOOL_REGISTRATION_EMAIL_VERIFICATION=false`.
 
 After CLI device authorization succeeds, the right-hand login pane switches to
 a success card prompting the user to return to the ostool terminal. Failed
@@ -578,17 +660,97 @@ Store it as `OSTOOL_MFA_ENCRYPTION_KEY` in the protected environment file and ba
 it up with the database. Replacing/losing it prevents decryption of existing MFA
 secrets. TOTP secrets use AES-256-GCM; eight single-use recovery codes are stored
 only as hashes. TOTP uses 30-second steps and rejects replay. Keep clocks in sync.
-`OSTOOL_REQUIRE_ADMIN_MFA=true` restricts unenrolled admins to enrollment; ordinary
+Enable **Require administrator MFA** in system settings to restrict unenrolled admins to enrollment; ordinary
 members use their own MFA preference. Changes revoke other sessions/PATs. Public
 deployments must provide and back up the same stable key through their environment.
 
-Optional SMTP enables verification of the current email and password recovery.
-Configure `OSTOOL_SMTP_HOST`, `OSTOOL_SMTP_FROM` and the port/TLS/credential settings
-in the public example. `starttls` normally uses port 587, `tls` port 465;
-`loopback_plaintext` is limited to local testing/mail relays. Registration requires
-email codes only with `OSTOOL_REGISTRATION_EMAIL_VERIFICATION=true`. Codes expire
-after ten minutes or five attempts, are consumed once, and have per-email/IP
-resend limits. Password recovery preserves enabled MFA and revokes old credentials.
+Configure mail in **System settings → Mail service** in the public edition. Select
+custom SMTP, Brevo, Mailjet or Amazon SES, set a verified sender, and save credentials
+in the encrypted SMTP password field (requires the stable root encryption key).
+Brevo uses its SMTP login + SMTP Key; Mailjet uses API Key + Secret Key; SES uses
+regional SMTP credentials, not an AWS Secret Access Key. Managed providers use
+STARTTLS on port 587; SES derives its endpoint from `ses_region` (default `us-east-1`).
+Custom SMTP uses the configured host, port and TLS mode: `starttls` normally uses
+587, `tls` 465, and `loopback_plaintext` is restricted to loopback mail relays/tests.
+Provider selection affects new submissions only. This integration sends through SMTP;
+it does not synchronize provider quotas, bounces or delivery receipts.
+
+Enable **Registration email verification** in the security settings to require an
+email code before account creation (disabled by default for existing deployments).
+The registration page has three steps: enter email and complete CAPTCHA to send a
+code, validate the code with the server, then set up username/password and accept
+the legal documents. The final submission includes `email_challenge_id` and
+`email_code`; no second CAPTCHA is needed for email-verified registration.
+The precheck does not consume the code or reset failed attempts; final consumption
+and account creation share a transaction. Username conflicts or changed legal
+versions therefore allow corrections without sending another code. Returning to
+previous steps preserves drafts; changing email/code clears verification, and expiry
+returns to email verification. Resending requires a fresh CAPTCHA and invalidates
+the previous code. The resend countdown survives page reloads in the same tab.
+Sites without required email verification use email/account steps and require a
+registration CAPTCHA on final submission.
+
+Password recovery is available at `/password-reset` when mail and password recovery are enabled;
+it preserves enabled MFA and revokes old sessions/PATs after a successful reset.
+Recovery keeps the email-code flow, shows code expiry, permits returning to edit
+the email, and blocks duplicate submissions. Resend countdowns survive reloads in
+the same tab; HTTP `Retry-After` updates the send/confirmation cooldowns.
+
+For local registration testing, enable **Local debug registration codes** and
+**Registration email verification** under **System settings → Login and security**.
+The setting defaults to false, is stored in PostgreSQL and takes effect without a
+restart, including with the release image used by `scripts/dev.sh`. The API must
+use a loopback listener. Keep the public edition (the local edition has no accounts).
+Registration requests then simulate delivery without requiring or contacting SMTP.
+In **System settings → Mail service → Mail delivery history**, administrators with
+`security.read` can see the current **Debug registration code** and its remaining
+lifetime; simulated rows are labeled separately from SMTP submissions.
+
+Only registration codes are previewed; password reset and current-email verification
+still require SMTP. The one-time code copy lives only in bounded process memory,
+never in database rows, logs, registration responses or public projections. The
+database still stores only hashes and governs verification, attempts and expiry.
+Consumed, replaced, invalidated and expired codes disappear from the current admin
+view; restarting loses the preview, so request a new code after the cooldown.
+CAPTCHA, IP/email/site limits and all registration steps remain active. Disabling the
+setting hides previews and restores normal SMTP registration delivery.
+Use the debug policy only in a local test deployment.
+
+`POST /api/v1/auth/email-code` accepts `{email, action, verification}`, where `action`
+is `register` or `password_reset` and `verification` is the existing action-bound
+human proof. It returns `{challenge_id, expires_in, resend_after, message}`.
+`POST /api/v1/auth/registration-email/verify` accepts `{email, challenge_id, code}`
+and returns `{verified:true}` without creating an account or consuming the code.
+It requires open registration with email verification enabled, shares each code's
+failure budget with final registration, and limits each IP to 10 checks per 15 minutes.
+Invalid/expired/consumed codes return HTTP 400 `registration_email_invalid`.
+`POST /api/v1/auth/password-reset` accepts `{challenge_id, code, new_password}`.
+All browser mutations retain Origin/CSRF checks. Requests are accepted before SMTP
+submission, with the same response for existing registrations, unknown/disabled
+recovery accounts and SMTP failures. Inspect mail history for submission results;
+`sent` means SMTP accepted, not delivery to the inbox. Codes are never returned in public responses or stored in plaintext in PostgreSQL;
+the explicit local development preview above is the only display exception. Delivery is attempted once, with a 15-second overall timeout;
+restart-interrupted sends are not retried automatically. Request another code after
+the cooldown if needed.
+
+Default limits: 30 mail-code requests per IP per 15 minutes before CAPTCHA verification;
+60-second shared recipient cooldown; 5 requests per email and 8 per IP per hour across
+all mail purposes; and 100 requests per site per hour (`mail_hourly_limit`, adjustable
+from 1 to 100000). The shared email/IP limits and window follow `email_policy`;
+registration additionally follows `registration_email_policy`, and uses the longer
+of its cooldown and the shared cooldown. Unknown recipients and failures count toward
+these budgets. Redis enforces distributed counters and fails closed on errors;
+HTTP 429 includes `Retry-After`. Codes default to ten minutes and five attempts,
+including malformed answers, are single-use and purpose-bound; a resend invalidates
+the previous code for that purpose. Reset and signed-in email confirmations are each limited to 10 attempts
+per IP per 15 minutes. New account settings default to custom SMTP with the site budget above.
+
+Mail providers, SES regions, sending budgets and all SMTP parameters are configured
+only through system settings. SMTP username/API Key, password/Secret Key and the
+Turnstile Secret Key use encrypted credential fields. Responses expose presence
+flags; editors start empty, blank submissions retain a value, and explicit clear
+flags remove it. Switching mail providers clears the previous provider credentials;
+enter the new credentials before enabling delivery. Public Turnstile Site Keys remain ordinary editable settings.
 Email verification, password reset, password changes and legal consent have
 separate PostgreSQL records; the [initial migration](migrations/20261022000000_initial_schema.sql)
 is the source of truth for fields, indexes and lifecycle constraints.
@@ -652,7 +814,7 @@ services are available in either edition; axloader does not need TLS firmware.
   pages or WebSockets. User-facing URLs keep the public HTTPS origin. v7 kernel,
   initramfs and OTA transfers are server-to-device HTTP PUTs, not URL downloads.
 
-Set `OSTOOL_NETWORK_INTERFACE` to the actual device LAN interface if automatic
+Select the actual device LAN interface in **System settings → Network and uploads** if automatic
 selection picks another adapter. Existing installations whose stored TFTP settings
 were disabled by an earlier migration must re-enable TFTP in system settings and
 choose a LAN bind address. The optional throughput listener remains authenticated
@@ -675,7 +837,7 @@ administrator configures it; RAM-only boot devices may leave it unset. Persisten
 storage/firmware isolation still requires a verified board-specific recovery procedure.
 Real DNS/Caddy/TLS and physical firmware need
 separate deployment validation; isolated application tests do not prove those
-conditions. Authentication rules and routes are in [the API reference](../docs/api.md).
+conditions. Authentication rules and routes are in [the API reference](docs/api.md).
 
 ## Role permissions and immediate device use
 

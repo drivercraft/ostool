@@ -282,9 +282,27 @@ pub async fn history(State(state): State<AppState>) -> Result<Json<Value>, ApiEr
     Ok(Json(Value::Array(rows.into_iter().map(|r|Ok(json!({"kind":r.try_get::<String,_>("kind")?,"version":r.try_get::<i64,_>("version")?,"title":r.try_get::<String,_>("title")?,"content_hash":r.try_get::<String,_>("content_hash")?,"published_at":r.try_get::<chrono::DateTime<chrono::Utc>,_>("published_at")?}))).collect::<Result<Vec<_>,sqlx::Error>>()?)))
 }
 pub async fn mail_deliveries(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let rows=sqlx::query("SELECT id,purpose,recipient_email,status,error_code,created_at,completed_at FROM mail_deliveries ORDER BY created_at DESC,id LIMIT 100")
+    let preview = if state.config.read().await.security.dev_registration_codes {
+        state.dev_registration_codes.snapshot().await
+    } else {
+        Default::default()
+    };
+    let rows = sqlx::query("SELECT d.id,d.purpose,d.recipient_email,d.transport,d.status,d.error_code,d.created_at,d.completed_at,t.id AS active_challenge,t.expires_at FROM mail_deliveries d LEFT JOIN email_verification_tokens t ON t.id=d.challenge_id AND d.purpose='email:register' AND d.transport='development' AND t.purpose='email:register' AND t.consumed_at IS NULL AND t.invalidated_at IS NULL AND t.expires_at>now() ORDER BY d.created_at DESC,d.id LIMIT 100")
         .fetch_all(state.database.pool()).await?;
-    Ok(Json(Value::Array(rows.into_iter().map(|r|Ok(json!({"id":r.try_get::<Uuid,_>("id")?,"purpose":r.try_get::<String,_>("purpose")?,"recipient_email":r.try_get::<String,_>("recipient_email")?,"status":r.try_get::<String,_>("status")?,"error_code":r.try_get::<Option<String>,_>("error_code")?,"created_at":r.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at")?,"completed_at":r.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("completed_at")?}))).collect::<Result<Vec<_>,sqlx::Error>>()?)))
+    let mut result = Vec::with_capacity(rows.len());
+    for row in rows {
+        let mut value = json!({"id":row.try_get::<Uuid,_>("id")?,"purpose":row.try_get::<String,_>("purpose")?,
+            "recipient_email":row.try_get::<String,_>("recipient_email")?,"transport":row.try_get::<String,_>("transport")?,
+            "status":row.try_get::<String,_>("status")?,"error_code":row.try_get::<Option<String>,_>("error_code")?,
+            "created_at":row.try_get::<chrono::DateTime<chrono::Utc>,_>("created_at")?,"completed_at":row.try_get::<Option<chrono::DateTime<chrono::Utc>>,_>("completed_at")?});
+        if let Some(id) = row.try_get::<Option<Uuid>, _>("active_challenge")?
+            && let Some(code) = preview.get(&id)
+        {
+            value["development_code"] = json!({"value":code,"expires_at":row.try_get::<chrono::DateTime<chrono::Utc>,_>("expires_at")?});
+        }
+        result.push(value);
+    }
+    Ok(Json(Value::Array(result)))
 }
 pub async fn register(
     state: &AppState,
@@ -309,6 +327,13 @@ pub async fn register(
     let username = crate::persistence::postgres::normalize_username(&request.username)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let hash = crate::persistence::postgres::hash_password_async(request.password.clone()).await?;
+    let max_attempts = state
+        .config
+        .read()
+        .await
+        .security
+        .registration_email_policy
+        .max_attempts;
     let mut tx = state.database.begin().await?;
     sqlx::query("SELECT id FROM site_settings WHERE id=1 FOR SHARE")
         .fetch_one(&mut *tx)
@@ -329,6 +354,16 @@ pub async fn register(
                 "协议已更新，请重新阅读并同意后注册",
             ));
         }
+    }
+    if verified {
+        crate::security::mail::consume_registration(
+            &mut tx,
+            email,
+            request.email_challenge_id,
+            request.email_code.as_deref(),
+            max_attempts,
+        )
+        .await?;
     }
     let user:Uuid=sqlx::query_scalar("INSERT INTO users(email,password_hash,display_name,email_verified_at,username) VALUES($1,$2,$3,CASE WHEN $4 THEN now() ELSE NULL END,$5) RETURNING id")
         .bind(email).bind(hash).bind(display_name).bind(verified).bind(username).fetch_one(&mut *tx).await.map_err(|error| {
@@ -358,6 +393,8 @@ pub async fn register(
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountSecrets {
+    #[serde(default)]
+    pub smtp_username: Option<String>,
     pub smtp_password: Option<String>,
     pub turnstile_secret: Option<String>,
 }
@@ -377,6 +414,7 @@ impl AccountSecrets {
                 .transpose()
         };
         Ok(Self {
+            smtp_username: seal("smtp_username", &config.security.smtp_username)?,
             smtp_password: seal("smtp_password", &config.security.smtp_password)?,
             turnstile_secret: seal("turnstile_secret", &config.security.turnstile_secret)?,
         })
@@ -399,6 +437,7 @@ impl AccountSecrets {
                 })
                 .transpose()
         };
+        config.security.smtp_username = open("smtp_username", &self.smtp_username)?;
         config.security.smtp_password = open("smtp_password", &self.smtp_password)?;
         config.security.turnstile_secret = open("turnstile_secret", &self.turnstile_secret)?;
         Ok(())
@@ -407,6 +446,9 @@ impl AccountSecrets {
 #[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecretUpdates {
+    pub smtp_username: Option<String>,
+    #[serde(default)]
+    pub clear_smtp_username: bool,
     pub smtp_password: Option<String>,
     pub turnstile_secret: Option<String>,
     #[serde(default)]
@@ -417,6 +459,11 @@ pub struct SecretUpdates {
 impl SecretUpdates {
     fn apply(&self, config: &mut crate::ServerConfig) -> anyhow::Result<()> {
         for (value, clear, target) in [
+            (
+                &self.smtp_username,
+                self.clear_smtp_username,
+                &mut config.security.smtp_username,
+            ),
             (
                 &self.smtp_password,
                 self.clear_smtp_password,
@@ -454,8 +501,7 @@ pub struct AccountSettingsInput {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AccountSettingsRecord {
-    #[serde(default)]
-    pub secrets: Option<AccountSecrets>,
+    pub secrets: AccountSecrets,
     pub revision: i64,
     pub settings: crate::security::config::AccountSettings,
 }
@@ -463,35 +509,23 @@ pub async fn load_account_settings(
     database: &crate::persistence::Database,
     config: &mut crate::ServerConfig,
 ) -> anyhow::Result<()> {
-    if let Some(mut stored) = database
+    let stored = if let Some(stored) = database
         .record::<AccountSettingsRecord>("account-settings")
         .await?
     {
-        if stored.secrets.is_none() {
-            stored.secrets = Some(AccountSecrets::from_config(config)?);
-            database.save_record("account-settings", &stored).await?;
-        }
         stored
-            .secrets
-            .as_ref()
-            .expect("initialized secrets")
-            .apply(config)?;
-        return stored.settings.apply(config);
-    }
-    let initial = AccountSettingsRecord {
-        secrets: Some(AccountSecrets::from_config(config)?),
-        revision: 1,
-        settings: crate::security::config::AccountSettings::from_config(config),
+    } else {
+        let initial = AccountSettingsRecord {
+            secrets: AccountSecrets::from_config(config)?,
+            revision: 1,
+            settings: crate::security::config::AccountSettings::from_config(config),
+        };
+        initial.settings.apply(config)?;
+        database
+            .initialize_record("account-settings", &initial)
+            .await?
     };
-    initial.settings.apply(config)?;
-    let stored = database
-        .initialize_record("account-settings", &initial)
-        .await?;
-    stored
-        .secrets
-        .as_ref()
-        .expect("initialized secrets")
-        .apply(config)?;
+    stored.secrets.apply(config)?;
     stored.settings.apply(config)
 }
 pub fn public_auth(config: &crate::ServerConfig) -> Value {
@@ -502,31 +536,23 @@ pub fn public_auth(config: &crate::ServerConfig) -> Value {
         "password_reset_available":email && config.security.password_reset_enabled})
 }
 pub async fn account_settings(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let config = state.config.read().await;
     let record: AccountSettingsRecord = state
         .database
         .record("account-settings")
         .await?
         .ok_or_else(|| ApiError::not_found("账号策略尚未初始化"))?;
-    let config = state.config.read().await;
     Ok(Json(
         json!({"revision":record.revision,"settings":crate::security::config::AccountSettings::from_config(&config),
-        "secrets":{"smtp_password":config.security.smtp_password.is_some(),"turnstile_secret":config.security.turnstile_secret.is_some(),"mfa_key":config.security.mfa_encryption_key.is_some()}}),
+        "secrets":{"smtp_username":config.security.smtp_username.is_some(),"smtp_password":config.security.smtp_password.is_some(),"turnstile_secret":config.security.turnstile_secret.is_some(),"mfa_key":config.security.mfa_encryption_key.is_some()}}),
     ))
 }
 async fn update_account_settings(
     State(state): State<AppState>,
+    Extension(client): Extension<ClientContext>,
     Json(input): Json<AccountSettingsInput>,
 ) -> Result<Json<Value>, ApiError> {
     let mut config = state.config.write().await;
-    let mut next = config.clone();
-    input
-        .secret_updates
-        .apply(&mut next)
-        .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    input
-        .settings
-        .apply(&mut next)
-        .map_err(|e| ApiError::bad_request(e.to_string()))?;
     let mut tx = state.database.begin().await?;
     let payload: Value = sqlx::query_scalar(
         "SELECT payload FROM server_records WHERE name='account-settings' FOR UPDATE",
@@ -538,13 +564,41 @@ async fn update_account_settings(
     if current.revision != input.revision {
         return Err(ApiError::conflict("配置已更新，请保留草稿后载入最新版本"));
     }
+    let mut next = config.clone();
+    if input.settings.mail_provider != config.security.mail_provider {
+        next.security.smtp_username = None;
+        next.security.smtp_password = None;
+    }
+    input
+        .secret_updates
+        .apply(&mut next)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    input
+        .settings
+        .apply(&mut next)
+        .map_err(|e| ApiError::bad_request(e.to_string()))?;
+    if next.security.admin_allowed_networks != config.security.admin_allowed_networks
+        && !next.security.admin_allowed_networks.is_empty()
+    {
+        let ip = client
+            .ip
+            .parse::<std::net::IpAddr>()
+            .map_err(|_| ApiError::bad_request("无法确认当前管理员来源 IP"))?;
+        if !next.security.admin_allowed_networks.iter().any(|network| {
+            network
+                .parse::<ipnet::IpNet>()
+                .is_ok_and(|network| network.contains(&ip))
+        }) {
+            return Err(ApiError::bad_request(
+                "允许的管理网段须包含当前管理员来源，避免锁定后台访问",
+            ));
+        }
+    }
     let saved = AccountSettingsRecord {
-        secrets: Some(
-            AccountSecrets::from_config(&next)
-                .map_err(|error| ApiError::bad_request(error.to_string()))?,
-        ),
+        secrets: AccountSecrets::from_config(&next)
+            .map_err(|error| ApiError::bad_request(error.to_string()))?,
         revision: current.revision + 1,
-        settings: input.settings,
+        settings: crate::security::config::AccountSettings::from_config(&next),
     };
     sqlx::query(
         "UPDATE server_records SET payload=$1,updated_at=now() WHERE name='account-settings'",
@@ -557,6 +611,6 @@ async fn update_account_settings(
     drop(config);
     state
         .admin_events
-        .invalidate(&["account_settings", "site", "deployment"]);
+        .invalidate(&["account_settings", "site", "deployment", "mail_deliveries"]);
     Ok(Json(json!({"saved":true,"revision":saved.revision})))
 }

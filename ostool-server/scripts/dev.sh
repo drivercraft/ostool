@@ -45,8 +45,11 @@ dev_usage() {
 说明：
   仅管理 Docker，不调用 deploy.sh，不操作宿主机 systemd 或 /etc。
   local 直接使用 HTTP；public 启动标准 Caddy 容器提供 HTTPS。
+  首次使用请复制 .env.dev 为 .env 并替换密码、主密钥占位值。
   使用与正式部署相同的 release 程序、数据库和鉴权；预置业务数据仅由 seed 导入。
   与 deploy.sh docker 使用同一 Compose 项目及数据卷，不要同时管理同一环境。
+  public 版调试注册在后台开启“注册要求邮箱验证”和“本地调试注册码”，
+  再到“邮件投递记录”查看有效注册码，无需 SMTP 或重启。
 EOF
 }
 
@@ -77,7 +80,7 @@ dev_parse_args() {
 
 dev_prepare() {
     command -v docker >/dev/null || { printf '[错误] 请安装 Docker 和 Compose 插件。\n' >&2; exit 1; }
-    [[ -f $ENV_FILE ]] || { printf '[错误] 配置不存在：%s\n请复制 ostool-server/.env.example 为 .env 并填写配置。\n' "$ENV_FILE" >&2; exit 1; }
+    [[ -f $ENV_FILE ]] || { printf '[错误] 配置不存在：%s\n请复制 ostool-server/.env.dev 为 ostool-server/.env 并填写占位值。\n' "$ENV_FILE" >&2; exit 1; }
     ENV_FILE=$(cd -- "$(dirname -- "$ENV_FILE")" && pwd -P)/$(basename -- "$ENV_FILE")
     # 只读取选定文件，不继承终端中遗留的应用配置；不执行 dotenv 中的 Shell 内容。
     for name in ${!OSTOOL_@}; do unset "$name"; done
@@ -148,9 +151,9 @@ dev_run() {
             printf '[完成] 预置业务数据已导入，已有记录保留。\n';;
         cert)
             [[ $EDITION == public ]] || { printf '[信息] local 使用 HTTP，无需证书。\n'; return; }
-            mkdir -p "$REPO_DIR/.ostool-server-dev"
-            "${ALL_COMPOSE[@]}" cp caddy:/data/caddy/pki/authorities/local/root.crt "$REPO_DIR/.ostool-server-dev/root.crt"
-            printf '[完成] 根证书：%s/.ostool-server-dev/root.crt\n请在访问设备上信任此证书。\n' "$REPO_DIR";;
+            mkdir -p "$SERVER_DIR/.ostool-server-dev"
+            "${ALL_COMPOSE[@]}" cp caddy:/data/caddy/pki/authorities/local/root.crt "$SERVER_DIR/.ostool-server-dev/root.crt"
+            printf '[完成] 根证书：%s/.ostool-server-dev/root.crt\n请在访问设备上信任此证书。\n' "$SERVER_DIR";;
     esac
 }
 

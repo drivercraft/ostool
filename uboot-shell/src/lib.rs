@@ -238,14 +238,18 @@ impl UbootShell {
     pub async fn env(&mut self, name: impl Into<String>) -> Result<String> {
         let name = name.into();
         let s = self.cmd(&format!("echo ${name}")).await?;
-        let value = s
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .ok_or_else(|| Error::new(ErrorKind::NotFound, format!("env {name} not found")))?;
-        Ok(command::strip_command_timestamp(value)
-            .unwrap_or(value)
-            .to_string())
+        let parts = s
+            .split('\n')
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>();
+        let value = parts
+            .last()
+            .ok_or(Error::new(
+                ErrorKind::NotFound,
+                format!("env {name} not found"),
+            ))?
+            .to_string();
+        Ok(value)
     }
 
     pub async fn env_int(&mut self, name: impl Into<String>) -> Result<usize> {

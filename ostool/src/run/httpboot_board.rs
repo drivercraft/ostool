@@ -476,13 +476,7 @@ mod tests {
         HttpBootBoardRunner {
             input,
             board_config: BoardRunConfig::default(),
-            client: BoardServerClient::new_with_endpoint(
-                crate::board::global_config::BoardEndpoint {
-                    base_url: format!("http://127.0.0.1:{}/", port).parse().unwrap(),
-                    auth_mode: crate::board::global_config::AuthMode::Disabled,
-                },
-            )
-            .unwrap(),
+            client: BoardServerClient::new("127.0.0.1", port).unwrap(),
             session: SessionCreatedResponse {
                 session_id: "demo".into(),
                 board_id: "board-1".into(),

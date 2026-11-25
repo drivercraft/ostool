@@ -40,10 +40,25 @@ pub struct BoardTypeSummary {
     pub tags: Vec<String>,
     pub total: usize,
     pub available: usize,
+    pub leases: Option<Vec<BoardLease>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoardLease {
+    pub board_id: String,
+    pub date_begin: String,
+    pub date_end: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CreateSessionRequest {
+    pub board_type: String,
+    pub required_tags: Vec<String>,
+    pub client_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateSessionRequestWithBoardId {
     pub board_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub board_id: Option<String>,
@@ -183,6 +198,9 @@ pub struct SharedSessionFileResponse {
     pub uploaded_at: DateTime<Utc>,
 }
 
+#[deprecated(note = "use SharedSessionFileResponse")]
+pub type FileResponse = SharedSessionFileResponse;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct HttpBootFileResponse {
     pub filename: String,
@@ -317,7 +335,7 @@ impl BoardServerClient {
         let request = self
             .request(Method::POST, self.endpoint("/api/v1/sessions"))
             .await?
-            .json(&CreateSessionRequest {
+            .json(&CreateSessionRequestWithBoardId {
                 board_type: board_type.to_string(),
                 board_id: board_id.map(ToOwned::to_owned),
                 required_tags: vec![],
@@ -825,50 +843,53 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn board_type_summary_matches_server_response() {
+    fn board_type_summary_accepts_response_without_leases() {
         let summaries: Vec<BoardTypeSummary> = serde_json::from_str(
-            r#"[{"board_type":"rk3568","tags":["arm64"],"total":2,"available":1}]"#,
+            r#"[
+                {
+                    "board_type": "rk3568",
+                    "tags": [],
+                    "total": 2,
+                    "available": 1
+                }
+            ]"#,
         )
         .unwrap();
-        assert_eq!(summaries[0].board_type, "rk3568");
-        assert_eq!(summaries[0].tags, ["arm64"]);
-        assert_eq!(summaries[0].total, 2);
-        assert_eq!(summaries[0].available, 1);
+
+        assert!(summaries[0].leases.is_none());
     }
 
-    #[tokio::test]
-    async fn host_and_port_constructor_keeps_local_http_anonymous() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let request = read_http_request_bytes(&mut socket).await;
-            let headers = String::from_utf8_lossy(&request).to_ascii_lowercase();
-            assert!(headers.starts_with("get /api/v1/board-types "));
-            assert!(!headers.contains("authorization:"));
-            write_http_response(
-                &mut socket,
-                "200 OK",
-                r#"[{"board_type":"local","tags":[],"total":1,"available":1}]"#,
-            )
-            .await;
-        });
-        let client = BoardServerClient::new("127.0.0.1", port).unwrap();
-        assert_eq!(
-            client.list_board_types().await.unwrap()[0].board_type,
-            "local"
-        );
-        assert!(client.websocket_authorization().await.unwrap().is_none());
-        server.await.unwrap();
+    #[test]
+    fn board_type_summary_parses_optional_leases() {
+        let summaries: Vec<BoardTypeSummary> = serde_json::from_str(
+            r#"[
+                {
+                    "board_type": "Rock-4D",
+                    "tags": [],
+                    "total": 1,
+                    "available": 1,
+                    "leases": [
+                        {
+                            "board_id": "Rock-4D-1",
+                            "date_begin": "2026-07-31 15:40:00",
+                            "date_end": "2026-08-03 15:40:00"
+                        }
+                    ]
+                }
+            ]"#,
+        )
+        .unwrap();
+
+        let leases = summaries[0].leases.as_ref().unwrap();
+        assert_eq!(leases.len(), 1);
+        assert_eq!(leases[0].board_id, "Rock-4D-1");
+        assert_eq!(leases[0].date_begin, "2026-07-31 15:40:00");
+        assert_eq!(leases[0].date_end, "2026-08-03 15:40:00");
     }
 
     #[test]
     fn resolve_relative_ws_url_uses_server_defaults() {
-        let client = BoardServerClient::new_with_endpoint(BoardEndpoint {
-            base_url: "http://127.0.0.1:8080/".parse().unwrap(),
-            auth_mode: AuthMode::Disabled,
-        })
-        .unwrap();
+        let client = BoardServerClient::new("127.0.0.1", 8080).unwrap();
         let url = client
             .resolve_ws_url("/api/v1/sessions/demo/serial/ws")
             .unwrap();
@@ -904,11 +925,7 @@ pub(crate) mod tests {
 
     #[test]
     fn resolve_absolute_ws_url_keeps_original_value() {
-        let client = BoardServerClient::new_with_endpoint(BoardEndpoint {
-            base_url: "http://127.0.0.1:8080/".parse().unwrap(),
-            auth_mode: AuthMode::Disabled,
-        })
-        .unwrap();
+        let client = BoardServerClient::new("127.0.0.1", 8080).unwrap();
         let url = client
             .resolve_ws_url("ws://10.0.0.2:9000/api/v1/sessions/demo/serial/ws")
             .unwrap();

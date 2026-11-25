@@ -513,7 +513,7 @@ pub async fn deployment(State(state): State<AppState>) -> Json<serde_json::Value
         })
     };
     let persistent = "PostgreSQL";
-    let mut storage = serde_json::json!({"boards":persistent,"dtbs":persistent,"ota":persistent,"configuration":"PostgreSQL（部署启动参数仍来自 TOML / .env）","active_sessions":"进程状态（重启释放，不恢复硬件连接）","artifacts":"PostgreSQL 分块存储（磁盘仅为可重建缓存）"});
+    let mut storage = serde_json::json!({"boards":persistent,"dtbs":persistent,"ota":persistent,"configuration":"PostgreSQL（仅启动依赖来自 .env）","active_sessions":"进程状态（重启释放，不恢复硬件连接）","artifacts":"PostgreSQL 分块存储（磁盘仅为可重建缓存）"});
     for key in ["users", "roles", "rentals"] {
         storage[key] = serde_json::json!("PostgreSQL");
     }

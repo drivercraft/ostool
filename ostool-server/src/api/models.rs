@@ -419,6 +419,7 @@ pub struct AdminServerConfigReadonly {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdminServerConfigEditable {
+    pub audit_retention_days: u32,
     pub network: TftpNetworkConfig,
     pub upload_limits: UploadLimitsConfig,
 }
@@ -431,6 +432,8 @@ pub struct AdminServerConfigResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateServerConfigRequest {
+    #[serde(default)]
+    pub audit_retention_days: Option<u32>,
     pub network: TftpNetworkConfig,
     pub upload_limits: UploadLimitsConfig,
 }

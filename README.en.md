@@ -17,21 +17,8 @@
 
 See [docs/axloader-network-control.md](docs/axloader-network-control.md) for axloader network control (the v7-only protocol, serial auto-binding, and reverse OTA), persistent MAC binding, web administration, built-in QEMU virtual boards, and local validation with a real FAT disk image. The complete API contract is documented in [docs/api.md](docs/api.md).
 
-`ostool-server` provides an independent website and `/qcl/` console with PostgreSQL
-persistence. Local edition uses anonymous HTTP with exclusive board sessions, no account/rental assignment, and no Redis dependency. Public edition requires HTTPS login, Redis risk controls and scheduled board rentals. Authorized members can also claim boards immediately from the website. Session artifacts are stored in PostgreSQL chunks; disk copies are rebuildable caches. See the [server guide](ostool-server/README.md) for
-deployment, security and existing board migration, and the
-[management interface guide](docs/admin-ui.md) for UI and SSE behavior.
-
-The new board form supports copying an existing board from its footer. Admin lists show edit, enable/disable and more icons according to supported actions, with copy and related management links in the menu. Copied boards have an empty ID; review device bindings before saving. DTB management supports enable/disable. Disabled files cannot be newly selected or loaded; release sessions using a DTB before disabling it.
-
-Board IDs `new` (case insensitive), `.` and `..` are reserved. Enabled boards cannot share communication or relay serial ports, including aliases of the same device; disabled configurations do not reserve ports. U-Boot boards require a configured serial console before enabling; incomplete configurations can be saved disabled. Without device UDP discovery, new public HTTPboot boards start disabled: configure a fixed endpoint, then explicitly enable them. With discovery enabled, boards can connect by MAC over LAN HTTP. Disable a board before removing its fixed endpoint.
-
-Use `ostool-server/scripts/dev.sh start|stop|status` for the unified Docker Compose
-release environment; `build` only builds the image, and `restart` applies source
-changes. Settings come from `ostool-server/.env`; Caddy HTTPS serves loopback and
-LAN addresses. `seed` imports demonstration data separately. See the
-[development guide](ostool-server/README.md#local-development-environment) for
-configuration and certificate trust.
+The management console at `/admin/` uses React + shadcn/ui. In the new-board form, choose a power module and power it on before selecting a discovered MAC or entering one manually; saving completes the binding. All management pages receive SSE updates and preserve displayed data and drafts across reconnects. See [Admin UI and event protocol](docs/admin-ui.md).
+At startup, incompatible board TOML files move into `quarantine/` under the board directory with their original contents and diagnostic metadata; valid boards continue to load.
 
 **ostool** is a Rust toolset designed specifically for operating system development, aiming to provide OS developers with convenient build, configuration, and startup environments. It's particularly suitable for embedded system development, supporting system testing and debugging through Qemu virtual machines and U-Boot bootloader.
 
@@ -372,8 +359,6 @@ board_ip = "192.168.1.100"
 
 `BootPayloadConfig.cmdline` and `initramfs` are independent optional fields. They are top-level runtime settings for QEMU, board, and U-Boot configurations rather than build settings. `initramfs` is the **host** archive, separate from a Linux guest initrd. Direct AArch64/RISC-V QEMU boot passes it with `-initrd` and passes `cmdline` with `-append`; x86 uses `EFI/BOOT/initramfs.cpio` and `cmdline.txt` on the UEFI ESP, not the Linux x86 boot protocol for a bare ELF. U-Boot includes the archive as a FIT ramdisk and sets `bootargs` before booting. FIT generation removes inherited `linux,initrd-start/end` properties and any exactly matching memory reservation from the input DTB. If the FIT contains a ramdisk, U-Boot writes the range for this boot. The serial command path rejects a `cmdline` containing a single quote. For board HTTP Boot, the archive and kernel belong to the same session and the server records the archive size and SHA-256. Device control supports only v7: `/api/v1/status` reports `protocol_version: 7`, and every boot, serial, and OTA mutation plus the CLI-to-server files/kernel uploads carry `X-Axloader-Protocol-Version: 7`. Missing or incorrect versions return the fixed `unsupported_protocol` error before body parsing, serial takeover, or mutation. The server owns transfer, length/digest, session, epoch, and binding checks; axloader checks the ELF machine, format, load ranges, and its local EFI entry using the target's own rules. Cmdline is passed through EFI LoadOptions and initramfs through the TGOS `BootPayload` table. The archive limit is 256 MiB and the command-line limit is 4095 printable ASCII bytes. Firmware and kernels on physical boards must implement the corresponding handoff.
 
-Public user APIs retain HTTPS and authentication. In either edition the device LAN supports axloader v7 UDP/HTTP and U-Boot read-only TFTP/YMODEM. Device HTTP needs no TLS certificate or Bearer; fixed HTTP endpoints require LAN IPs. Credentials are optional for capable devices. Management API/SSE projections do not expose raw internal device errors.
-
 HTTP Boot does not persist `boot_arch` and does not migrate old configuration; `httpboot` is the only current wire/config kind. The CLI uploads the actual file bytes and sends no architecture, image-format, or entry headers. It does not reject `Architecture::Unknown`, an unlisted `e_machine`, or ELF32 on the host. Axloader's `arch` is an open nonempty display string and is shown verbatim; identity and association continue to use MAC, `boot_epoch`, and the serial ID/binding. An incompatible real image is rejected by the device with an open `{code,message}` error, and the host preserves the first terminal failure.
 
 OTA images are opaque bytes to the server. `OtaStore` accepts nonempty content up to 32 MiB, stores its label, length and SHA-256, and checks storage integrity before delivery; axloader validates PE/COFF format, `Machine` and platform loadability. The server and Web UI do not restrict OTA by CPU architecture. Offline jobs may queue; missing actual `ota` state leaves a visible waiting reason. Reverse OTA keeps `PUT /api/v1/ota/image`, `POST /api/v1/ota/confirm`, and `boot_epoch`; legacy discovery/poll/OTA-download routes are removed.
@@ -433,8 +418,8 @@ baud_rate = "${env:BAUD_RATE:-115200}"
 
 ```toml
 [board]
-server = "https://localhost"
-auth_mode = "required"
+server = "http://localhost:2999"
+auth_mode = "disabled"
 ```
 
 Use the TUI editor to update it:
@@ -447,18 +432,9 @@ ostool board config
 
 `ostool board connect -b <BOARD_TYPE>` allocates any available board of that type; pass `--board-id <BOARD_ID>` as well when you need to connect a specific board.
 
-The same ostool executable connects to local and public deployments; no separate
-client build or installation is needed. Both deployments use the same Board REST, file and serial WebSocket
-APIs. Set `auth_mode` manually to `"disabled"` for local CLI access and device
-management without login. Public deployments use `"required"`; after
-`ostool login`, HTTP and WebSocket requests carry credentials. The client setting
-cannot disable authentication on a public server. `ostool board ls` displays board
-type, available count, total count and tags, without the removed rental fields.
-
 A `.board.toml` file can declare shared files relative to its own directory with
-`session_files`. `ostool board run` resolves them from the file selected by
-`--board-config`, or the workspace `.board.toml` by default. Library callers can
-supply the directory through `BoardRunRequest::with_session_files`. After the board session is created,
+`session_files`. The caller supplies that directory through
+`BoardRunRequest::with_session_files`; after the board session is created,
 ostool uploads each file under its unchanged relative path. In every
 `shell_check_steps` entry, `shell_cmd` can expand `${boardServerIp}`,
 `${boardServerHttpBaseUrl}`, and `${sessionFile:<relative-path>}`. Absolute
@@ -466,55 +442,15 @@ paths, `..`, symlink escapes, duplicate paths, and missing files are rejected
 before the run starts. The interface does not support aliases or renamed
 uploads.
 
-Servers advertising `server_side_operations` handle U-Boot network setup,
-TFTP/serial loading and shared-file command expansion. ostool receives RAM load
-addresses, uploads the FIT and requests boot; device-network addresses are kept
-out of the user API. While the server loads the image onto the board, the terminal
-shows a live `#` progress bar: YMODEM reports sent/total bytes, and TFTP preserves
-U-Boot's `#` progress marks without estimating a percentage. Successful transfers
-show completion. Both editions use the same routes; public uploads, downloads
-and serial connections carry login credentials over HTTPS/WSS. Servers without
-this capability continue to use the original client boot flow.
-
-
-Public deployments support grouped role capabilities. A role with immediate device
-allocation can use existing board commands to acquire an enabled shared device
-without per-use approval. The server enforces duration, concurrency, board-type
-scope and prior bookings while retaining durable usage records. This capability
-does not grant console access. This applies to public edition; local edition needs no login, user assignment or approval.
-Each immediate allocation also creates a rental application with an “Automatically
-approved” status and decision note, visible in both application lists.
-Roles have a globally unique, immutable code and an enabled state. Disabling a role
-revokes its users' credentials and ends device access; enabling it again requires
-a fresh login. The role capability `board.instant` grants use without approval; a device's
-**Open for use without application** switch only selects eligible devices and grants no user permissions.
-The three built-in roles are Administrator (`admin`), Ordinary user (`member`) and
-Advanced user (`advanced`). Registration defaults to `member`. Advanced users have
-exactly the ordinary user permissions plus `board.instant` and can directly claim
-devices with the switch enabled. Neither user role grants console access.
-Duration, concurrency and board-type scope configure the limits of that permission.
-
-The console’s **Session management** group has separate **Current sessions**
-(`/qcl/sessions`) and **Session history** (`/qcl/session-history`) navigation pages.
-Current sessions shows active device use and release actions; session history provides
-filtered, paginated persistent usage records. Local edition also records usage;
-completed sessions from before the history feature are not backfilled.
-
 ### Public board authentication
 
-Public connections use authenticated HTTPS. Local connections use HTTP with `auth_mode = "disabled"`:
+Direct LAN connections to `ostool-server` keep the anonymous HTTP configuration above. A public authentication gateway uses a complete HTTPS URL:
 
 ```toml
 [board]
 server = "https://203.0.113.10:8443"
 auth_mode = "required"
 ```
-
-The server uses one `.env`; frontend runtime settings come from the API. Deploy through `ostool-server/scripts/deploy.sh docker up` or `systemd up`. Local edition uses direct HTTP; public edition uses Caddy HTTPS with a loopback backend.
-
-The administrator session page includes persistent hardware usage history with filtering and pagination, including local edition. Completed usage from before the upgrade is not reconstructed.
-
-Website accounts require a globally unique username. Both website and administrator sign-in accept a username or email; upgrades generate usernames for existing accounts.
 
 Sign in through browser device authorization, or import a personal access token (PAT) created in the web UI from standard input:
 
@@ -526,14 +462,6 @@ ostool logout --server https://203.0.113.10:8443
 ```
 
 OAuth sign-in automatically refreshes short-lived access tokens. A PAT is sent directly as a Bearer token and is never refreshed. Credentials are stored in the system credential store when available, with a warned user-level credential-file fallback. Automation can use `OSTOOL_BOARD_ACCESS_TOKEN`; it is neither stored nor refreshed.
-
-The website `/devices` shows all configured devices as searchable cards without login, including unavailable devices. Public members can use an assigned board through `ostool` only during an approved rental window; cancellation or expiry releases its session. HTTP and serial WebSocket requests share Bearer identity and rental ownership checks. Device LAN transports support native HTTP and UDP discovery; public-edition TFTP binds an explicit LAN IP; see [API authorization boundaries](docs/api.md).
-
-CLI keyring operations run on blocking threads to avoid nested async runtimes. Rejecting an environment token leaves an independently saved login intact.
-
-Rental and public authorization features are implemented in `ostool-server` without requiring a synchronized CLI change. Client patches address confirmed defects and preserve the original OAuth/Bearer/Board API contract; a 401 is returned without automatically replaying the request.
-
-For public CLI operations, set `board.auth_mode = "required"` and `board.server` to the HTTPS site. `login --server` does not rewrite global configuration. See the [public CLI authorization and deployment guide](ostool-server/README.md#security-configuration) for device login, automatic refresh, concurrent credential recovery, rental enforcement and deployment boundaries.
 
 Public authentication requires HTTPS. The client verifies certificates only through the system trust store; deployments using a private CA must install its root certificate on client systems. Do not use HTTP, bypass certificate verification, or put tokens in configuration files.
 
@@ -835,28 +763,3 @@ This project is dual-licensed:
 ## 🙏 Acknowledgments
 
 Thanks to all developers and users who have contributed to the ostool project!
-
-### Server security and device authentication
-
-Local edition uses anonymous HTTP without user rentals; configure the CLI with `auth_mode = "disabled"`. Public edition requires HTTPS login. New CLI configuration defaults to the public security settings.
-The device LAN is independent of public user HTTPS. Configure a fixed LAN HTTP endpoint
-or enable v7 UDP discovery with `OSTOOL_LOADER_NETWORK_ENABLED=true`; native axloader
-needs no TLS or Bearer. HTTPS and encrypted credentials remain optional for capable devices.
-Enable read-only TFTP with `OSTOOL_TFTP_ENABLED=true`, binding an explicit LAN IP in public
-edition. U-Boot selects TFTP or YMODEM per board, without silently falling back to serial.
-Authorized public-edition members can claim and return boards immediately, or submit reservations for approval.
-Kernel and shared uploads enforce concurrency, timeouts, capacity, credential revocation and rental checks.
-Device downloads use short-lived, single-file capabilities through an optional separate LAN HTTP listener instead of user login tokens.
-Database backups include session artifacts; upload staging and serial caches are rebuildable. Restarting does not restore live hardware connections.
-
-For anonymous local access, save this CLI profile with `ostool board config`:
-
-```toml
-[board]
-server = "http://127.0.0.1:2999"
-auth_mode = "disabled"
-```
-
-Run the server with `OSTOOL_EDITION=local`. Redis, administrator accounts and user assignments are unnecessary; public edition cannot disable authentication.
-
-The device catalog links to independent `/devices/:boardId` product pages. Administrators maintain public descriptions, images and specifications under Device documents. Rental applications use a single-viewport layout with device information beside the application form.

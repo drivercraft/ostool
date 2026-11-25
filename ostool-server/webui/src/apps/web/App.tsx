@@ -42,17 +42,12 @@ import { DeviceCatalog } from "@/apps/web/pages/DeviceCatalog";
 import { SiteSessionProvider } from "@/apps/web/session";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "@/components/ui/sonner";
+import { RegistrationForm } from "@/apps/web/components/registration-form";
 import { TextField } from "@/components/forms";
-import { useCountdown } from "@/components/security-hooks";
 import { HumanVerification } from "@/components/human-verification";
 import { PasswordReset } from "@/components/password-reset";
 import { SecurityVerification } from "@/components/security-verification";
-import {
-  api,
-  notifyAuthChanged,
-  type HumanProof,
-  type EmailChallenge,
-} from "@/api/client";
+import { api, notifyAuthChanged, type HumanProof } from "@/api/client";
 import { Button } from "@/components/ui/button";
 
 function Devices() {
@@ -176,9 +171,7 @@ function Login() {
   const deviceApproved = !!userCode && approvedCode === userCode;
   const [deviceConfirmed, setDeviceConfirmed] = useState(false);
   useEffect(() => setDeviceConfirmed(false), [userCode]);
-  const registering =
-    location.pathname === "/register" || query.get("register") === "1";
-  const [confirmPassword, setConfirmPassword] = useState("");
+  const registering = location.pathname === "/register";
   const authConfig = useEdition();
   const legalSite = useSiteSettings();
   useEffect(() => {
@@ -193,27 +186,12 @@ function Login() {
       " · " +
       legalSite.settings.name;
   }, [deviceApproved, registering, userCode, legalSite.settings.name]);
-  const [accepted, setAccepted] = useState(false);
-  useEffect(
-    () => setAccepted(false),
-    [legalSite.terms_version, legalSite.privacy_version],
-  );
-
-  const registrationAllowed = authConfig.allow_registration;
-  const emailRequired =
-    registering && authConfig.registration_email_verification;
   const [proof, setProof] = useState<HumanProof>();
   const [refreshKey, setRefreshKey] = useState(0);
   const [challenge, setChallenge] = useState<string>();
   const [otp, setOtp] = useState("");
-  const [emailChallenge, setEmailChallenge] = useState<EmailChallenge>();
-  const [emailCode, setEmailCode] = useState("");
-  const [emailUntil, setEmailUntil] = useState(0);
-  const resendRemaining = useCountdown(emailUntil);
-  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -221,37 +199,11 @@ function Login() {
       toast.error("请确认由您发起登录，并核对终端验证码。");
       return;
     }
-    if (registering && password !== confirmPassword) {
-      toast.error("两次输入的密码不一致");
-      return;
-    }
     setBusy(true);
     try {
-      if (
-        registering &&
-        (Array.from(password).length < 8 ||
-          new TextEncoder().encode(password).length > 1024)
-      )
-        throw new Error("密码需要至少 8 个字符，且不超过 1024 字节");
       const result = challenge
         ? await api.verifyMfa(challenge, otp)
-        : registering
-          ? await api.register(
-              username,
-              email,
-              password,
-              displayName,
-              proof ?? {},
-              emailChallenge
-                ? { id: emailChallenge.challenge_id, code: emailCode }
-                : undefined,
-              {
-                accepted,
-                terms_version: legalSite.terms_version,
-                privacy_version: legalSite.privacy_version,
-              },
-            )
-          : await api.login(email, password, proof ?? {});
+        : await api.login(email, password, proof ?? {});
       if (result.mfa_required) {
         setChallenge(result.challenge_id);
         setPassword("");
@@ -343,22 +295,16 @@ function Login() {
                   <p>你可以关闭此页面，回到终端继续操作。</p>
                 </div>
               </div>
+            ) : registering ? (
+              <RegistrationForm />
             ) : (
               <form className="auth-card" onSubmit={submit}>
                 <div>
-                  <h2>
-                    {userCode
-                      ? "批准 CLI 登录"
-                      : registering
-                        ? "创建你的账号"
-                        : "欢迎回来"}
-                  </h2>
+                  <h2>{userCode ? "批准 CLI 登录" : "欢迎回来"}</h2>
                   <p>
                     {userCode
                       ? "确认设备验证码并授权 ostool CLI。"
-                      : registering
-                        ? "创建账号，开始管理你的设备。"
-                        : "登录后进入个人工作台，查看租赁和申请设备。"}
+                      : "登录后进入个人工作台，查看租赁和申请设备。"}
                   </p>
                 </div>
                 {userCode && (
@@ -372,148 +318,28 @@ function Login() {
                     </p>
                   </>
                 )}
-                {registering && registrationAllowed === false && (
-                  <MessageToast
-                    kind="warning"
-                    message="当前站点未开放注册，请联系管理员。"
-                  />
-                )}
                 {!challenge ? (
                   <>
-                    {registering && (
-                      <div className="auth-identity-fields">
-                        <TextField
-                          label="用户名"
-                          required
-                          minLength={3}
-                          maxLength={40}
-                          pattern="[A-Za-z0-9][A-Za-z0-9_-]{2,39}"
-                          autoComplete="username"
-                          placeholder="3–40 位字母、数字、_ 或 -"
-                          value={username}
-                          onValue={setUsername}
-                        />
-                        <TextField
-                          label="显示名称"
-                          value={displayName}
-                          onValue={setDisplayName}
-                          placeholder="你的名字"
-                          hint=""
-                        />
-                      </div>
-                    )}
                     <TextField
-                      label={registering ? "邮箱" : "账号"}
-                      type={registering ? "email" : "text"}
+                      label="账号"
                       required
                       value={email}
-                      onValue={(value) => {
-                        setEmail(value);
-                        setEmailChallenge(undefined);
-                        setEmailCode("");
-                      }}
-                      autoComplete={registering ? "email" : "username"}
-                      placeholder={
-                        registering ? "you@company.com" : "输入用户名或邮箱"
-                      }
-                      hint=""
+                      onValue={setEmail}
+                      autoComplete="username"
+                      placeholder="输入用户名或邮箱"
                     />
-
                     <TextField
                       label="密码"
                       type="password"
                       required
                       maxLength={1024}
-                      minLength={registering ? 8 : undefined}
                       value={password}
                       onValue={setPassword}
-                      autoComplete={
-                        registering ? "new-password" : "current-password"
-                      }
-                      placeholder={
-                        registering ? "至少 8 个字符" : "输入登录密码"
-                      }
+                      autoComplete="current-password"
+                      placeholder="输入登录密码"
                     />
-                    {registering && (
-                      <TextField
-                        label="确认密码"
-                        type="password"
-                        required
-                        minLength={8}
-                        maxLength={1024}
-                        value={confirmPassword}
-                        onValue={setConfirmPassword}
-                        autoComplete="new-password"
-                        placeholder="再次输入密码"
-                      />
-                    )}
-                    {emailRequired && (
-                      <div className="security-form">
-                        {emailChallenge ? (
-                          <>
-                            <TextField
-                              label="邮箱验证码"
-                              value={emailCode}
-                              onValue={setEmailCode}
-                              required
-                              maxLength={6}
-                              inputMode="numeric"
-                            />
-                            <p>
-                              验证码签发后 {emailChallenge.expires_in}{" "}
-                              秒内有效。
-                            </p>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              disabled={resendRemaining > 0}
-                              onClick={() => {
-                                setEmailChallenge(undefined);
-                                setEmailCode("");
-                                setRefreshKey((v) => v + 1);
-                              }}
-                            >
-                              {resendRemaining
-                                ? `${resendRemaining} 秒后可重新获取验证码`
-                                : "重新获取邮箱验证码"}
-                            </Button>
-                          </>
-                        ) : (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            disabled={busy || !email || !proof?.captcha_code}
-                            onClick={() => {
-                              setBusy(true);
-                              void api
-                                .emailCode(email, "register", proof ?? {})
-                                .then((value) => {
-                                  setEmailChallenge(value);
-                                  toast.success("邮箱验证码已发送");
-                                  setEmailUntil(
-                                    Date.now() + value.resend_after * 1000,
-                                  );
-                                })
-                                .catch((e) => toast.error(e.message))
-                                .finally(() => {
-                                  setBusy(false);
-                                  setRefreshKey((v) => v + 1);
-                                });
-                            }}
-                          >
-                            发送邮箱验证码
-                          </Button>
-                        )}
-                      </div>
-                    )}
                     <HumanVerification
-                      action={
-                        emailRequired && !emailChallenge
-                          ? "registration_email"
-                          : registering
-                            ? "register"
-                            : "login"
-                      }
+                      action="login"
                       refreshKey={refreshKey}
                       disabled={busy}
                       onChange={setProof}
@@ -536,13 +362,7 @@ function Login() {
                   />
                 )}
 
-                {!challenge && (
-                  <AuthLegal
-                    registration={registering}
-                    accepted={accepted}
-                    onChange={setAccepted}
-                  />
-                )}
+                {!challenge && <AuthLegal />}
                 {userCode && (
                   <label className="auth-device-confirmation">
                     <Checkbox
@@ -561,10 +381,7 @@ function Login() {
                   disabled={
                     busy ||
                     (!!userCode && !deviceConfirmed) ||
-                    (!challenge && !proof?.captcha_code) ||
-                    (registering &&
-                      (registrationAllowed !== true || !accepted)) ||
-                    (emailRequired && (!emailChallenge || !emailCode))
+                    (!challenge && !proof?.captcha_code)
                   }
                 >
                   {busy
@@ -573,9 +390,7 @@ function Login() {
                       ? "验证并登录"
                       : userCode
                         ? "登录并批准"
-                        : registering
-                          ? "创建账号"
-                          : "登录"}{" "}
+                        : "登录"}{" "}
                   <ArrowRight size={15} />
                 </Button>
                 {challenge && (
@@ -591,19 +406,12 @@ function Login() {
                     重新登录
                   </Button>
                 )}
-                {!registering &&
-                  (authConfig.password_reset_available ??
-                    authConfig.email_security_available) && (
-                    <Link to="/password-reset">忘记密码</Link>
-                  )}
+                {authConfig.password_reset_available && (
+                  <Link to="/password-reset">忘记密码</Link>
+                )}
                 {!userCode && (
-                  <Link
-                    className="auth-switch"
-                    to={registering ? "/login" : "/register"}
-                  >
-                    {registering
-                      ? "已有账号？返回登录"
-                      : "还没有账号？免费注册"}
+                  <Link className="auth-switch" to="/register">
+                    还没有账号？免费注册
                   </Link>
                 )}
               </form>

@@ -22,7 +22,6 @@ async fn public_import_creates_configured_admin_and_preserves_changed_passwords(
                 "OSTOOL_DATABASE_SCHEMA",
                 config.database.schema.as_ref().unwrap(),
             )
-            .env("OSTOOL_NETWORK_INTERFACE", "lo")
             .env("OSTOOL_PUBLIC_BASE_URL", "https://boards.example.test")
             .env("OSTOOL_ADMIN_USERNAME", "lab_admin")
             .env("OSTOOL_ADMIN_EMAIL", "admin@example.test")

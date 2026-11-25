@@ -333,6 +333,7 @@ export interface AdminServerConfigReadonly {
 }
 
 export interface AdminServerConfigEditable {
+  audit_retention_days: number;
   network: TftpNetworkConfig;
   upload_limits: UploadLimitsConfig;
 }
@@ -343,6 +344,7 @@ export interface AdminServerConfigResponse {
 }
 
 export interface UpdateServerConfigRequest {
+  audit_retention_days?: number;
   network: TftpNetworkConfig;
   upload_limits: UploadLimitsConfig;
 }
@@ -763,6 +765,8 @@ export interface LegalVersion {
   published_at: string;
 }
 export interface MailDelivery {
+  transport: "smtp" | "development";
+  development_code?: { value: string; expires_at: string };
   id: string;
   purpose: string;
   recipient_email: string;
@@ -793,6 +797,8 @@ export interface NamePolicy {
   display_name_keywords: string[];
 }
 export interface AccountSettings {
+  dev_registration_codes: boolean;
+  admin_allowed_networks: string[];
   name_policy: NamePolicy;
   allow_registration: boolean;
   access_token_ttl_secs: number;
@@ -806,10 +812,12 @@ export interface AccountSettings {
   registration_email_verification: boolean;
   login_max_failures: number;
   login_lock_secs: number;
+  mail_provider: "smtp" | "brevo" | "mailjet" | "ses";
+  ses_region: string;
+  mail_hourly_limit: number;
   smtp_enabled: boolean;
   smtp_host: string | null;
   smtp_port: number;
-  smtp_username: string | null;
   smtp_from: string | null;
   smtp_tls: "starttls" | "tls" | "loopback_plaintext";
   password_reset_enabled: boolean;
@@ -821,6 +829,7 @@ export interface AccountSettingsView {
   revision: number;
   settings: AccountSettings;
   secrets: {
+    smtp_username: boolean;
     smtp_password: boolean;
     turnstile_secret: boolean;
     mfa_key: boolean;
@@ -868,6 +877,8 @@ export interface LeasePage {
 }
 
 export interface SecretUpdates {
+  smtp_username?: string;
+  clear_smtp_username?: boolean;
   smtp_password?: string;
   turnstile_secret?: string;
   clear_smtp_password?: boolean;

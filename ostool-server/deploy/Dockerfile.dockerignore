@@ -1,4 +1,4 @@
-.git
+**/.git
 **/target
 **/node_modules
 **/dist
@@ -8,6 +8,6 @@
 **/.env.*
 **/*.key
 **/AGENTS.md
-.ostool-server*
+**/.ostool-server*
 .codex
 assets

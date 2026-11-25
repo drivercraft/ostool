@@ -580,6 +580,9 @@ fn intent(method: &Method, path: &str, payload: &Value) -> Option<Intent> {
         ("roles", _, "GET") => ("role.view", "查看角色信息"),
         ("server-config", _, "GET") => ("settings.view", "查看系统设置"),
         ("tftp", _, "GET") => ("tftp.view", "查看 TFTP 配置"),
+        ("account-settings", Some("captcha"), "POST") => {
+            ("system.captcha.test", "测试人机验证配置")
+        }
         ("account-settings", _, _) => ("system.account.update", "更新账号与邮件安全策略"),
         ("site-settings", _, _) => ("system.site.update", "更新站点与协议配置"),
         ("auth", Some("login"), _) if path.starts_with("/api/v1/admin/") => {
@@ -1099,6 +1102,25 @@ pub async fn event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn captcha_configuration_tests_do_not_claim_to_update_settings() {
+        assert_eq!(
+            intent(
+                &Method::POST,
+                "/api/v1/admin/account-settings/captcha/verify",
+                &json!({})
+            )
+            .unwrap()
+            .action,
+            "system.captcha.test"
+        );
+        assert_eq!(
+            intent(&Method::PUT, "/api/v1/admin/account-settings", &json!({}))
+                .unwrap()
+                .action,
+            "system.account.update"
+        );
+    }
     #[test]
     fn secrets_are_never_copied_to_details() {
         let input = json!({"password":"TOP_SECRET","new_password":"TOP_SECRET","token":"TOP_SECRET","power_management":{"power_on_cmd":"TOP_SECRET"},"notes":"TOP_SECRET","id":"board-one","disabled":true});

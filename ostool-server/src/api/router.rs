@@ -1510,6 +1510,7 @@ async fn get_server_config(
 
 async fn update_server_config(
     State(state): State<AppState>,
+    actor: Option<axum::extract::Extension<crate::api::auth::CurrentUser>>,
     axum::Json(request): axum::Json<UpdateServerConfigRequest>,
 ) -> Result<axum::Json<AdminServerConfigResponse>, ApiError> {
     if request.network.interface.trim().is_empty() {
@@ -1520,12 +1521,21 @@ async fn update_server_config(
         .validate()
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
 
-    {
-        let mut config = state.config.write().await;
-        config.network = request.network;
-        config.upload_limits = request.upload_limits;
-    }
-    state.save_config().await?;
+    let can_manage_audit = if let Some(actor) = actor {
+        crate::security::permissions::access(&state.database, &actor.0.0)
+            .await?
+            .allows("audits.manage")
+    } else {
+        false
+    };
+    state
+        .update_runtime_settings(
+            request.network,
+            request.upload_limits,
+            request.audit_retention_days,
+            can_manage_audit,
+        )
+        .await?;
 
     let config = state.config.read().await.clone();
     Ok(axum::Json(server_config_response(&config)))
@@ -2895,6 +2905,7 @@ fn server_config_response(config: &crate::config::ServerConfig) -> AdminServerCo
     AdminServerConfigResponse {
         readonly: readonly_server_config(config),
         editable: AdminServerConfigEditable {
+            audit_retention_days: config.audit.retention_days.unwrap_or(0),
             network: config.network.clone(),
             upload_limits: config.upload_limits.clone(),
         },

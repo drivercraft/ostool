@@ -758,7 +758,7 @@ async fn optional_smtp_verification_and_password_recovery_revoke_old_credentials
         .security_cache
         .as_ref()
         .unwrap()
-        .clear("email-resend", email)
+        .clear("mail-recipient-cooldown", email)
         .await
         .unwrap();
     let reset = f.request("POST", "/api/v1/auth/email-code", None,
@@ -1296,7 +1296,6 @@ async fn account_settings_are_validated_private_versioned_persistent_and_enforce
     assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
     assert_eq!(f.state.config.read().await.security.login_max_failures, 6);
     f.state.config.write().await.security.smtp_password = Some("deploy-smtp-secret".into());
-    settings["smtp_username"] = json!("smtp-user");
     settings["smtp_host"] = json!("smtp.example.test");
     settings["smtp_from"] = json!("noreply@example.test");
     settings["login_max_failures"] = json!(3);
@@ -1309,7 +1308,7 @@ async fn account_settings_are_validated_private_versioned_persistent_and_enforce
             "PUT",
             endpoint,
             Some(&cookies),
-            json!({"revision":1,"settings":settings}),
+            json!({"revision":1,"settings":settings,"secret_updates":{"smtp_username":"smtp-user"}}),
         )
         .await;
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
@@ -1344,6 +1343,8 @@ async fn account_settings_are_validated_private_versioned_persistent_and_enforce
         "OSTOOL_EDITION=public\nOSTOOL_SMTP_PASSWORD=deploy-smtp-secret\n",
     )
     .unwrap();
+    assert!(ostool_server::environment::apply(&mut reloaded, Some(&env_file)).is_err());
+    std::fs::write(&env_file, "OSTOOL_EDITION=public\n").unwrap();
     ostool_server::environment::apply(&mut reloaded, Some(&env_file)).unwrap();
     ostool_server::api::site::load_account_settings(&f.state.database, &mut reloaded)
         .await
@@ -1780,10 +1781,9 @@ async fn settings_secrets_are_encrypted_write_only_versioned_and_recoverable() {
         .request("GET", endpoint, Some(&cookies), Value::Null)
         .await
         .body;
-    view["settings"]["smtp_username"] = json!("smtp-account");
     view["settings"]["smtp_host"] = json!("smtp.example.test");
     view["settings"]["smtp_from"] = json!("noreply@example.test");
-    let saved=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_password":"private-smtp-password","turnstile_secret":"private-turnstile-key"}})).await;
+    let saved=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_username":"smtp-account","smtp_password":"private-smtp-password","turnstile_secret":"private-turnstile-key"}})).await;
     assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
     let payload = f
         .state
@@ -1846,8 +1846,7 @@ async fn settings_secrets_are_encrypted_write_only_versioned_and_recoverable() {
         .request("GET", endpoint, Some(&cookies), Value::Null)
         .await
         .body;
-    view["settings"]["smtp_username"] = Value::Null;
-    let cleared=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"clear_smtp_password":true,"clear_turnstile_secret":true}})).await;
+    let cleared=f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"clear_smtp_username":true,"clear_smtp_password":true,"clear_turnstile_secret":true}})).await;
     assert_eq!(cleared.status, StatusCode::OK, "{}", cleared.body);
     view = f
         .request("GET", endpoint, Some(&cookies), Value::Null)
@@ -1863,8 +1862,7 @@ async fn settings_secrets_are_encrypted_write_only_versioned_and_recoverable() {
     assert!(!audit.contains("private-smtp-password"));
     assert!(!audit.contains("private-turnstile-key"));
     f.state.config.write().await.security.mfa_encryption_key = None;
-    view["settings"]["smtp_username"] = json!("smtp-account");
-    assert_eq!(f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_password":"must-not-store-without-key"}})).await.status,StatusCode::BAD_REQUEST);
+    assert_eq!(f.request("PUT",endpoint,Some(&cookies),json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_username":"smtp-account","smtp_password":"must-not-store-without-key"}})).await.status,StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]
@@ -3688,4 +3686,1235 @@ async fn force_release_requires_explicit_session_and_rental_management_permissio
         .status,
         StatusCode::FORBIDDEN
     );
+}
+
+async fn configure_test_mail(f: &Fixture, port: u16) {
+    let mut config = f.state.config.write().await;
+    config.security.smtp_host = Some("127.0.0.1".into());
+    config.security.smtp_from = Some("security@ostool.test".into());
+    config.security.smtp_port = port;
+    config.security.smtp_tls = ostool_server::security::config::SmtpTls::LoopbackPlaintext;
+}
+
+async fn request_test_mail(f: &Fixture, email: &str, registration: bool) -> Reply {
+    f.request("POST", "/api/v1/auth/email-code", None, json!({
+        "email":email,"action":if registration {"register"} else {"password_reset"},
+        "verification":f.proof(if registration {"registration_email"} else {"password_reset"}).await
+    })).await
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn mail_limits_share_cooldowns_and_enforce_site_budget() {
+    let f = Fixture::new(true).await;
+    let (port, mut messages, task) = smtp_sink().await;
+    configure_test_mail(&f, port).await;
+    f.state.config.write().await.security.mail_hourly_limit = 1;
+    let sent = request_test_mail(&f, "cooldown@security.test", true).await;
+    assert_eq!(sent.status, StatusCode::OK, "{}", sent.body);
+    mail_code(&mut messages).await;
+    // Switching purpose/case must not bypass the recipient cooldown.
+    let blocked = request_test_mail(&f, "COOLDOWN@security.test", false).await;
+    assert_eq!(blocked.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(blocked.headers.contains_key("retry-after"));
+    let global = request_test_mail(&f, "another@security.test", true).await;
+    assert_eq!(global.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(global.headers.contains_key("retry-after"));
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM mail_deliveries")
+        .fetch_one(f.state.database.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn malformed_mail_codes_exhaust_attempts_and_reset_cannot_replay() {
+    let f = Fixture::new(true).await;
+    let (port, mut messages, task) = smtp_sink().await;
+    configure_test_mail(&f, port).await;
+    f.state
+        .config
+        .write()
+        .await
+        .security
+        .email_policy
+        .max_attempts = 2;
+    let sent = request_test_mail(&f, "admin@security.test", false).await;
+    assert_eq!(sent.status, StatusCode::OK, "{}", sent.body);
+    let correct = mail_code(&mut messages).await;
+    for code in ["invalid", "", correct.as_str()] {
+        let rejected = f.request("POST", "/api/v1/auth/password-reset", None, json!({
+            "challenge_id":sent.body["challenge_id"],"code":code,"new_password":"replacement-password-123"
+        })).await;
+        assert_eq!(
+            rejected.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            rejected.body
+        );
+    }
+    let invalid: bool = sqlx::query_scalar("SELECT invalidated_at IS NOT NULL AND consumed_at IS NULL FROM password_reset_tokens WHERE id=$1")
+        .bind(sent.body["challenge_id"].as_str().unwrap().parse::<Uuid>().unwrap())
+        .fetch_one(f.state.database.pool()).await.unwrap();
+    assert!(invalid);
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn mail_submission_hides_unknown_accounts_and_delivery_failure() {
+    let f = Fixture::new(true).await;
+    // Reserve then close a local port: delivery must fail without contacting any real provider.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    configure_test_mail(&f, port).await;
+    let known = request_test_mail(&f, "admin@security.test", false).await;
+    let unknown = request_test_mail(&f, "unknown@security.test", false).await;
+    let existing = request_test_mail(&f, "admin@security.test", true).await;
+    assert_eq!(existing.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(known.status, StatusCode::OK);
+    assert_eq!(unknown.status, known.status);
+    assert_eq!(unknown.body["message"], known.body["message"]);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let failed: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM mail_deliveries WHERE status='failed' AND error_code='smtp_delivery_failed')")
+                .fetch_one(f.state.database.pool()).await.unwrap();
+            if failed { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.unwrap();
+    let invalid: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM password_reset_tokens WHERE invalidated_at IS NOT NULL",
+    )
+    .fetch_one(f.state.database.pool())
+    .await
+    .unwrap();
+    assert_eq!(invalid, 2);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn mail_request_budget_applies_before_human_verification() {
+    let f = Fixture::new(true).await;
+    for _ in 0..30 {
+        let rejected = f
+            .request(
+                "POST",
+                "/api/v1/auth/email-code",
+                None,
+                json!({"email":"admin@security.test","action":"password_reset","verification":{}}),
+            )
+            .await;
+        assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    }
+    let limited = f
+        .request(
+            "POST",
+            "/api/v1/auth/email-code",
+            None,
+            json!({"email":"other@security.test","action":"register","verification":{}}),
+        )
+        .await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(limited.headers.contains_key("retry-after"));
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM mail_deliveries")
+        .fetch_one(f.state.database.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn mail_recipient_and_ip_budgets_cannot_be_bypassed_by_switching_purpose() {
+    let f = Fixture::new(true).await;
+    let (port, mut messages, task) = smtp_sink().await;
+    configure_test_mail(&f, port).await;
+    {
+        let mut config = f.state.config.write().await;
+        config.security.email_policy.email_limit = 1;
+        config.security.email_policy.ip_limit = 2;
+    }
+    assert_eq!(
+        request_test_mail(&f, "budget@security.test", true)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    mail_code(&mut messages).await;
+    f.state
+        .security_cache
+        .as_ref()
+        .unwrap()
+        .clear("mail-recipient-cooldown", "budget@security.test")
+        .await
+        .unwrap();
+    // Register and reset have separate purpose counters; the shared email budget still denies reset.
+    assert_eq!(
+        request_test_mail(&f, "budget@security.test", false)
+            .await
+            .status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        request_test_mail(&f, "unknown@security.test", false)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    // The shared IP budget sees the registration and the reset, even though no email was sent for the latter.
+    assert_eq!(
+        request_test_mail(&f, "third@security.test", true)
+            .await
+            .status,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn registration_precheck_preserves_code_until_account_creation_commits() {
+    let f = Fixture::new(true).await;
+    let (port, mut messages, task) = smtp_sink().await;
+    configure_test_mail(&f, port).await;
+    f.state
+        .config
+        .write()
+        .await
+        .security
+        .registration_email_verification = true;
+    let email = "staged@security.test";
+    let issued = request_test_mail(&f, email, true).await;
+    assert_eq!(issued.status, StatusCode::OK);
+    let code = mail_code(&mut messages).await;
+    let input = json!({"email":email,"challenge_id":issued.body["challenge_id"],"code":code});
+    // Both visits to step two may validate the same code, without consuming attempts or proof.
+    for _ in 0..2 {
+        let checked = f
+            .request(
+                "POST",
+                "/api/v1/auth/registration-email/verify",
+                None,
+                input.clone(),
+            )
+            .await;
+        assert_eq!(checked.status, StatusCode::OK, "{}", checked.body);
+        assert_eq!(checked.body["verified"], true);
+    }
+    let id = issued.body["challenge_id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    let fresh: bool = sqlx::query_scalar(
+        "SELECT consumed_at IS NULL AND attempts=0 FROM email_verification_tokens WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(f.state.database.pool())
+    .await
+    .unwrap();
+    assert!(fresh);
+    f.state
+        .database
+        .create_user(
+            "taken_member",
+            "taken@security.test",
+            "existing-password-123",
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let mut register = json!({"email":email,"username":"taken_member","password":"staged-password-123",
+        "email_challenge_id":id,"email_code":code});
+    let conflict = f
+        .request("POST", "/api/v1/auth/register", None, register.clone())
+        .await;
+    assert_eq!(conflict.status, StatusCode::CONFLICT, "{}", conflict.body);
+    let unused: bool =
+        sqlx::query_scalar("SELECT consumed_at IS NULL FROM email_verification_tokens WHERE id=$1")
+            .bind(id)
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert!(unused, "username conflict must roll back proof consumption");
+    register["username"] = json!("staged_member");
+    // The email challenge already required human verification; final submission needs no second CAPTCHA.
+    let created = f
+        .request("POST", "/api/v1/auth/register", None, register.clone())
+        .await;
+    assert_eq!(created.status, StatusCode::CREATED, "{}", created.body);
+    let consumed: bool = sqlx::query_scalar(
+        "SELECT consumed_at IS NOT NULL FROM email_verification_tokens WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(f.state.database.pool())
+    .await
+    .unwrap();
+    assert!(consumed);
+    let replay = f
+        .request(
+            "POST",
+            "/api/v1/auth/registration-email/verify",
+            None,
+            input,
+        )
+        .await;
+    assert_eq!(replay.body["code"], "registration_email_invalid");
+    register["username"] = json!("replayed_member");
+    let replay = f
+        .request("POST", "/api/v1/auth/register", None, register)
+        .await;
+    assert_eq!(replay.body["code"], "registration_email_invalid");
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn registration_precheck_binds_email_expires_and_shares_failure_budget() {
+    let f = Fixture::new(true).await;
+    let (port, mut messages, task) = smtp_sink().await;
+    configure_test_mail(&f, port).await;
+    {
+        let mut config = f.state.config.write().await;
+        config.security.registration_email_verification = true;
+        config.security.registration_email_policy.max_attempts = 2;
+    }
+    let email = "bounded@security.test";
+    let issued = request_test_mail(&f, email, true).await;
+    let code = mail_code(&mut messages).await;
+    let id = issued.body["challenge_id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    for (recipient, answer) in [
+        ("other@security.test", code.as_str()),
+        (email, "bad"),
+        (email, code.as_str()),
+    ] {
+        let response = f
+            .request(
+                "POST",
+                "/api/v1/auth/registration-email/verify",
+                None,
+                json!({"email":recipient,"challenge_id":id,"code":answer}),
+            )
+            .await;
+        assert_eq!(response.status, StatusCode::BAD_REQUEST);
+        assert_eq!(response.body["code"], "registration_email_invalid");
+    }
+    // Registration shares the exhausted precheck budget, even with the correct code.
+    let rejected = f.request("POST", "/api/v1/auth/register", None,
+        json!({"email":email,"username":"bounded_member","password":"bounded-password-123","email_challenge_id":id,"email_code":code})).await;
+    assert_eq!(rejected.body["code"], "registration_email_invalid");
+    let expired = request_test_mail(&f, "expired@security.test", true).await;
+    let expired_code = mail_code(&mut messages).await;
+    let expired_id = expired.body["challenge_id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    sqlx::query(
+        "UPDATE email_verification_tokens SET expires_at=now()-interval '1 second' WHERE id=$1",
+    )
+    .bind(expired_id)
+    .execute(f.state.database.pool())
+    .await
+    .unwrap();
+    let rejected = f
+        .request(
+            "POST",
+            "/api/v1/auth/registration-email/verify",
+            None,
+            json!({"email":"expired@security.test","challenge_id":expired_id,"code":expired_code}),
+        )
+        .await;
+    assert_eq!(rejected.body["code"], "registration_email_invalid");
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn registration_precheck_is_rate_limited_origin_checked_and_feature_gated() {
+    let f = Fixture::new(true).await;
+    let input =
+        json!({"email":"missing@security.test","challenge_id":Uuid::new_v4(),"code":"123456"});
+    let disabled = f
+        .request(
+            "POST",
+            "/api/v1/auth/registration-email/verify",
+            None,
+            input.clone(),
+        )
+        .await;
+    assert_eq!(disabled.status, StatusCode::FORBIDDEN);
+    let (port, _messages, task) = smtp_sink().await;
+    configure_test_mail(&f, port).await;
+    f.state
+        .config
+        .write()
+        .await
+        .security
+        .registration_email_verification = true;
+    let cross_origin = f
+        .custom(
+            "POST",
+            "/api/v1/auth/registration-email/verify",
+            None,
+            input.clone(),
+            Some("https://evil.test"),
+            None,
+        )
+        .await;
+    assert_eq!(cross_origin.status, StatusCode::FORBIDDEN);
+    for _ in 0..10 {
+        assert_eq!(
+            f.request(
+                "POST",
+                "/api/v1/auth/registration-email/verify",
+                None,
+                input.clone()
+            )
+            .await
+            .status,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    let limited = f
+        .request(
+            "POST",
+            "/api/v1/auth/registration-email/verify",
+            None,
+            input.clone(),
+        )
+        .await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(limited.headers.contains_key("retry-after"));
+    f.state.config.write().await.auth.allow_registration = false;
+    assert_eq!(
+        f.request(
+            "POST",
+            "/api/v1/auth/registration-email/verify",
+            None,
+            input
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn registration_resend_invalidates_prechecked_code_and_concurrent_creation_is_single_use() {
+    let f = Fixture::new(true).await;
+    let (port, mut messages, task) = smtp_sink().await;
+    configure_test_mail(&f, port).await;
+    f.state
+        .config
+        .write()
+        .await
+        .security
+        .registration_email_verification = true;
+    let email = "resend@security.test";
+    let first = request_test_mail(&f, email, true).await;
+    let first_code = mail_code(&mut messages).await;
+    let old_input =
+        json!({"email":email,"challenge_id":first.body["challenge_id"],"code":first_code});
+    assert_eq!(
+        f.request(
+            "POST",
+            "/api/v1/auth/registration-email/verify",
+            None,
+            old_input.clone()
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    f.state
+        .security_cache
+        .as_ref()
+        .unwrap()
+        .clear("mail-recipient-cooldown", email)
+        .await
+        .unwrap();
+    let second = request_test_mail(&f, email, true).await;
+    assert_eq!(second.status, StatusCode::OK);
+    let second_code = mail_code(&mut messages).await;
+    assert_eq!(
+        f.request(
+            "POST",
+            "/api/v1/auth/registration-email/verify",
+            None,
+            old_input
+        )
+        .await
+        .body["code"],
+        "registration_email_invalid"
+    );
+    let new_input =
+        json!({"email":email,"challenge_id":second.body["challenge_id"],"code":second_code});
+    assert_eq!(
+        f.request(
+            "POST",
+            "/api/v1/auth/registration-email/verify",
+            None,
+            new_input
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    let input = json!({"email":email,"username":"race_member","password":"concurrent-password-123", "email_challenge_id":second.body["challenge_id"],"email_code":second_code});
+    let (a, b) = tokio::join!(
+        f.request("POST", "/api/v1/auth/register", None, input.clone()),
+        f.request("POST", "/api/v1/auth/register", None, input)
+    );
+    let mut statuses = [a.status.as_u16(), b.status.as_u16()];
+    statuses.sort();
+    assert_eq!(statuses, [201, 400]);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM users WHERE email=$1")
+        .bind(email)
+        .fetch_one(f.state.database.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 1);
+    task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn development_registration_codes_allow_admin_testing_without_smtp_and_keep_public_proofs_hashed()
+ {
+    let f = Fixture::new(true).await;
+    assert!(!f.state.config.read().await.security.dev_registration_codes);
+    let unconfigured = request_test_mail(&f, "preview@security.test", true).await;
+    assert_eq!(unconfigured.status, StatusCode::SERVICE_UNAVAILABLE);
+    {
+        let mut config = f.state.config.write().await;
+        config.security.dev_registration_codes = true;
+        config.security.registration_email_verification = true;
+        config.validate().unwrap();
+    }
+    let admin = f.login(true).await;
+    let cookies = test_security::cookie_header(&admin.headers);
+    let issued = request_test_mail(&f, "preview@security.test", true).await;
+    assert_eq!(issued.status, StatusCode::OK, "{}", issued.body);
+    assert!(issued.body.get("code").is_none());
+    assert!(issued.body.get("development_code").is_none());
+    let anonymous = f
+        .request("GET", "/api/v1/admin/mail-deliveries", None, Value::Null)
+        .await;
+    assert_eq!(anonymous.status, StatusCode::UNAUTHORIZED);
+    let history = f
+        .request(
+            "GET",
+            "/api/v1/admin/mail-deliveries",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(history.status, StatusCode::OK, "{}", history.body);
+    assert_eq!(history.headers["cache-control"], "no-store");
+    let mail = &history.body[0];
+    assert_eq!(mail["transport"], "development");
+    assert_eq!(mail["status"], "sent");
+    let code = mail["development_code"]["value"].as_str().unwrap();
+    assert_eq!(code.len(), 6);
+    assert!(code.bytes().all(|byte| byte.is_ascii_digit()));
+    let settings = f
+        .request(
+            "GET",
+            "/api/v1/admin/account-settings",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert_eq!(settings.body["settings"]["dev_registration_codes"], true);
+    assert_eq!(settings.body["settings"]["dev_registration_codes"], true);
+    let public = f
+        .request("GET", "/api/v1/auth/config", None, Value::Null)
+        .await;
+    assert!(public.body.get("dev_registration_codes").is_none());
+    assert_eq!(public.body["password_reset_available"], false);
+    let reset = request_test_mail(&f, "admin@security.test", false).await;
+    assert_eq!(
+        reset.status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "development previews must not simulate password recovery"
+    );
+    let id = issued.body["challenge_id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    let stored: String =
+        sqlx::query_scalar("SELECT code_hash FROM email_verification_tokens WHERE id=$1")
+            .bind(id)
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert_eq!(stored, crypto::proof_hash("email:register", id, code));
+    let verified = f
+        .request(
+            "POST",
+            "/api/v1/auth/registration-email/verify",
+            None,
+            json!({"email":"preview@security.test","challenge_id":id,"code":code}),
+        )
+        .await;
+    assert_eq!(verified.status, StatusCode::OK);
+    let registered = f.request("POST", "/api/v1/auth/register", None, json!({"email":"preview@security.test","password":"preview-password-123","email_challenge_id":id,"email_code":code})).await;
+    assert_eq!(
+        registered.status,
+        StatusCode::CREATED,
+        "{}",
+        registered.body
+    );
+    let member = test_security::cookie_header(&registered.headers);
+    assert_eq!(
+        f.request(
+            "GET",
+            "/api/v1/admin/mail-deliveries",
+            Some(&member),
+            Value::Null
+        )
+        .await
+        .status,
+        StatusCode::UNAUTHORIZED
+    );
+    let consumed = f
+        .request(
+            "GET",
+            "/api/v1/admin/mail-deliveries",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert!(consumed.body[0].get("development_code").is_none());
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn development_registration_previews_follow_resend_expiry_disabling_and_restart() {
+    let f = Fixture::new(true).await;
+    {
+        let mut config = f.state.config.write().await;
+        config.security.dev_registration_codes = true;
+        config.security.registration_email_verification = true;
+    }
+    let admin = f.login(true).await;
+    let cookies = test_security::cookie_header(&admin.headers);
+    let first = request_test_mail(&f, "lifecycle@security.test", true).await;
+    assert_eq!(first.status, StatusCode::OK);
+    let limited = request_test_mail(&f, "lifecycle@security.test", true).await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    f.state
+        .security_cache
+        .as_ref()
+        .unwrap()
+        .clear("mail-recipient-cooldown", "lifecycle@security.test")
+        .await
+        .unwrap();
+    let second = request_test_mail(&f, "lifecycle@security.test", true).await;
+    assert_eq!(second.status, StatusCode::OK);
+    let history = f
+        .request(
+            "GET",
+            "/api/v1/admin/mail-deliveries",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    let visible = history
+        .body
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row.get("development_code").is_some())
+        .count();
+    assert_eq!(visible, 1, "resending hides the replaced code");
+    f.state.config.write().await.security.dev_registration_codes = false;
+    let disabled = f
+        .request(
+            "GET",
+            "/api/v1/admin/mail-deliveries",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert!(
+        disabled
+            .body
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("development_code").is_none())
+    );
+    f.state.config.write().await.security.dev_registration_codes = true;
+    let config = f.state.config.read().await.clone();
+    let restarted = build_app_state(
+        f.state.config_path.as_ref().clone(),
+        config.clone(),
+        build_tftp_manager(&config.tftp),
+    )
+    .await
+    .unwrap();
+    let history = ostool_server::api::site::mail_deliveries(axum::extract::State(restarted))
+        .await
+        .unwrap()
+        .0;
+    assert!(
+        history
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("development_code").is_none()),
+        "restart must not recover plaintext previews from storage"
+    );
+    let second_id = second.body["challenge_id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    sqlx::query(
+        "UPDATE email_verification_tokens SET expires_at=now()-interval '1 second' WHERE id=$1",
+    )
+    .bind(second_id)
+    .execute(f.state.database.pool())
+    .await
+    .unwrap();
+    let expired = f
+        .request(
+            "GET",
+            "/api/v1/admin/mail-deliveries",
+            Some(&cookies),
+            Value::Null,
+        )
+        .await;
+    assert!(
+        expired
+            .body
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("development_code").is_none())
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn captcha_configuration_test_is_admin_only_action_bound_single_use_and_rate_limited() {
+    let f = Fixture::new(true).await;
+    let path = "/api/v1/admin/account-settings/captcha";
+    let verify = "/api/v1/admin/account-settings/captcha/verify";
+    assert_eq!(
+        f.request("GET", path, None, Value::Null).await.status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        f.request(
+            "GET",
+            "/api/v1/auth/captcha?action=configuration_test",
+            None,
+            Value::Null
+        )
+        .await
+        .status,
+        StatusCode::FORBIDDEN
+    );
+    let login = f.login(true).await;
+    let cookies = test_security::cookie_header(&login.headers);
+    let challenge = f.request("GET", path, Some(&cookies), Value::Null).await;
+    assert_eq!(challenge.status, StatusCode::OK, "{}", challenge.body);
+    assert_eq!(challenge.body["action"], "configuration_test");
+    assert_eq!(challenge.body["provider"], "image");
+    let id = challenge.body["id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    sqlx::query("UPDATE security_challenges SET secret_hash=$2 WHERE id=$1")
+        .bind(id)
+        .bind(crypto::proof_hash(
+            "captcha:configuration_test",
+            id,
+            "AB29Q",
+        ))
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    let proof = json!({"captcha_id":id,"captcha_code":"ab29q"});
+    let cross_origin = f
+        .custom(
+            "POST",
+            verify,
+            Some(&cookies),
+            proof.clone(),
+            Some("https://evil.test"),
+            None,
+        )
+        .await;
+    assert_eq!(cross_origin.status, StatusCode::FORBIDDEN);
+    let checked = f
+        .request("POST", verify, Some(&cookies), proof.clone())
+        .await;
+    assert_eq!(checked.status, StatusCode::OK, "{}", checked.body);
+    assert_eq!(checked.body["verified"], true);
+    assert_eq!(
+        f.request("POST", verify, Some(&cookies), proof).await.body["code"],
+        "captcha_invalid"
+    );
+    let wrong = f.request("GET", path, Some(&cookies), Value::Null).await;
+    let id = wrong.body["id"].as_str().unwrap().parse::<Uuid>().unwrap();
+    sqlx::query("UPDATE security_challenges SET secret_hash=$2 WHERE id=$1")
+        .bind(id)
+        .bind(crypto::proof_hash(
+            "captcha:configuration_test",
+            id,
+            "AB29Q",
+        ))
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    let logged_in = f.request("POST", "/api/v1/auth/login", None, json!({"email":"admin@security.test","password":"security-admin-password-123","verification":{"captcha_id":id,"captcha_code":"AB29Q"}})).await;
+    assert_eq!(logged_in.body["code"], "captcha_invalid");
+    for _ in 0..3 {
+        assert_eq!(
+            f.request("GET", path, Some(&cookies), Value::Null)
+                .await
+                .status,
+            StatusCode::OK
+        );
+    }
+    let limited = f.request("GET", path, Some(&cookies), Value::Null).await;
+    assert_eq!(limited.status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(limited.headers.contains_key("retry-after"));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn captcha_provider_and_key_rotation_invalidate_outstanding_challenges_before_cloudflare_calls()
+ {
+    let f = Fixture::new(true).await;
+    let image = f.proof("login").await;
+    {
+        let mut config = f.state.config.write().await;
+        config.security.captcha_provider =
+            ostool_server::security::config::CaptchaProvider::Turnstile;
+        config.security.turnstile_site_key = Some("public-site-key".into());
+        config.security.turnstile_secret = Some("private-secret-key".into());
+        config.security.turnstile_hostnames = vec!["boards.example.test".into()];
+        config.validate().unwrap();
+    }
+    let wrong_provider = f.request("POST", "/api/v1/auth/login", None, json!({"email":"admin@security.test","password":"security-admin-password-123","verification":image})).await;
+    assert_eq!(wrong_provider.body["code"], "captcha_invalid");
+    let cloudflare = f
+        .request(
+            "GET",
+            "/api/v1/auth/captcha?action=login",
+            None,
+            Value::Null,
+        )
+        .await;
+    assert_eq!(cloudflare.status, StatusCode::OK);
+    assert_eq!(cloudflare.body["provider"], "turnstile");
+    assert_eq!(cloudflare.body["expires_in"], 300);
+    assert_eq!(cloudflare.body["cdata"], cloudflare.body["id"]);
+    assert!(cloudflare.body.get("image_data_url").is_none());
+    assert!(!cloudflare.body.to_string().contains("private-secret-key"));
+    let id = cloudflare.body["id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    let payload: Value = sqlx::query_scalar("SELECT payload FROM security_challenges WHERE id=$1")
+        .bind(id)
+        .fetch_one(f.state.database.pool())
+        .await
+        .unwrap();
+    assert!(!payload.to_string().contains("private-secret-key"));
+    f.state.config.write().await.security.turnstile_secret = Some("rotated-secret-key".into());
+    let rotated = f.request("POST", "/api/v1/auth/login", None, json!({"email":"admin@security.test","password":"security-admin-password-123","verification":{"captcha_id":id,"captcha_code":"opaque-token"}})).await;
+    assert_eq!(rotated.body["code"], "captcha_invalid");
+    let remaining: i64 = sqlx::query_scalar("SELECT count(*) FROM security_challenges WHERE id=$1")
+        .bind(id)
+        .fetch_one(f.state.database.pool())
+        .await
+        .unwrap();
+    assert_eq!(remaining, 0);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn malformed_captcha_answers_consume_the_proof_and_cannot_be_retried() {
+    let f = Fixture::new(true).await;
+    for answer in [String::new(), "x".repeat(2049)] {
+        let mut proof = f.proof("login").await;
+        let id = proof["captcha_id"]
+            .as_str()
+            .unwrap()
+            .parse::<Uuid>()
+            .unwrap();
+        proof["captcha_code"] = json!(answer);
+        let rejected = f.request("POST", "/api/v1/auth/login", None, json!({"email":"admin@security.test","password":"security-admin-password-123","verification":proof})).await;
+        assert_eq!(rejected.body["code"], "captcha_invalid");
+        let remaining: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM security_challenges WHERE id=$1")
+                .bind(id)
+                .fetch_one(f.state.database.pool())
+                .await
+                .unwrap();
+        assert_eq!(remaining, 0);
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn runtime_credentials_are_write_only_and_debug_policy_is_persistent_without_environment_overrides()
+ {
+    let f = Fixture::new(true).await;
+    let admin = f.login(true).await;
+    let cookies = test_security::cookie_header(&admin.headers);
+    let endpoint = "/api/v1/admin/account-settings";
+    let mut view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    assert!(view["settings"].get("smtp_username").is_none());
+    assert_eq!(view["secrets"]["smtp_username"], false);
+    view["settings"]["dev_registration_codes"] = json!(true);
+    view["settings"]["registration_email_verification"] = json!(true);
+    let saved = f
+        .request(
+            "PUT",
+            endpoint,
+            Some(&cookies),
+            json!({"revision":view["revision"],"settings":view["settings"]}),
+        )
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    assert_eq!(
+        request_test_mail(&f, "runtime-debug@security.test", true)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let mut restored = f.state.config.read().await.clone();
+    restored.security.dev_registration_codes = false;
+    restored.security.registration_email_verification = false;
+    ostool_server::api::site::load_account_settings(&f.state.database, &mut restored)
+        .await
+        .unwrap();
+    assert!(
+        restored.security.dev_registration_codes
+            && restored.security.registration_email_verification
+    );
+    view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    view["settings"]["mail_provider"] = json!("mailjet");
+    view["settings"]["smtp_from"] = json!("noreply@example.test");
+    let saved = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_username":"private-mailjet-api-key","smtp_password":"private-mailjet-secret-key"}})).await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    assert_eq!(view["secrets"]["smtp_username"], true);
+    assert_eq!(view["secrets"]["smtp_password"], true);
+    assert!(!view.to_string().contains("private-mailjet"));
+    let stored: Value = f
+        .state
+        .database
+        .record("account-settings")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!stored.to_string().contains("private-mailjet"));
+    assert!(stored["settings"].get("smtp_username").is_none());
+    assert!(
+        stored["secrets"]["smtp_username"]
+            .as_str()
+            .unwrap()
+            .starts_with("v1:")
+    );
+    let unchanged = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_username":"","smtp_password":""}})).await;
+    assert_eq!(unchanged.status, StatusCode::OK);
+    assert_eq!(
+        f.state
+            .config
+            .read()
+            .await
+            .security
+            .smtp_username
+            .as_deref(),
+        Some("private-mailjet-api-key")
+    );
+    view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    let mut echo = view["settings"].clone();
+    echo["smtp_username"] = json!("must-not-be-an-ordinary-setting");
+    assert_eq!(
+        f.request(
+            "PUT",
+            endpoint,
+            Some(&cookies),
+            json!({"revision":view["revision"],"settings":echo})
+        )
+        .await
+        .status,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    view["settings"]["smtp_enabled"] = json!(false);
+    view["settings"]["admin_allowed_networks"] = json!(["192.0.2.0/24"]);
+    let locked = f
+        .request(
+            "PUT",
+            endpoint,
+            Some(&cookies),
+            json!({"revision":view["revision"],"settings":view["settings"]}),
+        )
+        .await;
+    assert_eq!(
+        locked.status,
+        StatusCode::BAD_REQUEST,
+        "must not lock the current administrator out"
+    );
+    view["settings"]["admin_allowed_networks"] = json!(["203.0.113.0/24"]);
+    let cleared = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"clear_smtp_username":true,"clear_smtp_password":true}})).await;
+    assert_eq!(cleared.status, StatusCode::OK, "{}", cleared.body);
+    let empty = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    assert_eq!(empty["secrets"]["smtp_username"], false);
+    assert_eq!(empty["secrets"]["smtp_password"], false);
+    let audit: Vec<String> = sqlx::query_scalar("SELECT details::text FROM audit_events")
+        .fetch_all(f.state.database.pool())
+        .await
+        .unwrap();
+    assert!(!audit.join(" ").contains("private-mailjet"));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn old_account_settings_are_rejected_without_importing_or_rewriting_them() {
+    let f = Fixture::new(true).await;
+    let canonical: Value = f
+        .state
+        .database
+        .record("account-settings")
+        .await
+        .unwrap()
+        .unwrap();
+    let mut old_account = canonical.clone();
+    old_account["settings"]["smtp_username"] = json!("obsolete-plaintext-account");
+    let mut missing_secrets = canonical.clone();
+    missing_secrets.as_object_mut().unwrap().remove("secrets");
+    for record in [old_account, missing_secrets] {
+        f.state
+            .database
+            .save_record("account-settings", &record)
+            .await
+            .unwrap();
+        let mut config = f.state.config.read().await.clone();
+        assert!(
+            ostool_server::api::site::load_account_settings(&f.state.database, &mut config)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            f.state
+                .database
+                .record::<Value>("account-settings")
+                .await
+                .unwrap()
+                .unwrap(),
+            record
+        );
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn audit_retention_runtime_settings_persist_across_restart_and_validate_before_mutation() {
+    let f = Fixture::new(true).await;
+    let admin = f.login(true).await;
+    let cookies = test_security::cookie_header(&admin.headers);
+    let endpoint = "/api/v1/admin/server-config";
+    let mut editable = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body["editable"]
+        .clone();
+    assert_eq!(editable["audit_retention_days"], 0);
+    editable["audit_retention_days"] = json!(30);
+    let saved = f
+        .request("PUT", endpoint, Some(&cookies), editable.clone())
+        .await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    assert_eq!(f.state.config.read().await.audit.retention_days, Some(30));
+    let current = f.state.config.read().await.clone();
+    let denied = f
+        .state
+        .update_runtime_settings(
+            current.network.clone(),
+            current.upload_limits.clone(),
+            Some(60),
+            false,
+        )
+        .await;
+    assert_eq!(denied.unwrap_err().status, StatusCode::FORBIDDEN);
+    f.state
+        .update_runtime_settings(current.network, current.upload_limits, None, false)
+        .await
+        .unwrap();
+    assert_eq!(f.state.config.read().await.audit.retention_days, Some(30));
+    editable["audit_retention_days"] = json!(4000);
+    assert_eq!(
+        f.request("PUT", endpoint, Some(&cookies), editable)
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(f.state.config.read().await.audit.retention_days, Some(30));
+    let mut config = f.state.config.read().await.clone();
+    config.audit.retention_days = None;
+    let restarted = build_app_state(
+        f.state.config_path.as_ref().clone(),
+        config.clone(),
+        build_tftp_manager(&config.tftp),
+    )
+    .await
+    .unwrap();
+    assert_eq!(restarted.config.read().await.audit.retention_days, Some(30));
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn account_settings_snapshot_keeps_revision_and_values_together() {
+    let f = Fixture::new(true).await;
+    let mut config = f.state.config.write().await;
+    let state = f.state.clone();
+    let mut reader = tokio::spawn(async move {
+        ostool_server::api::site::account_settings(axum::extract::State(state))
+            .await
+            .unwrap()
+            .0
+    });
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(25), &mut reader)
+            .await
+            .is_err()
+    );
+    let mut record: Value = f
+        .state
+        .database
+        .record("account-settings")
+        .await
+        .unwrap()
+        .unwrap();
+    record["revision"] = json!(2);
+    record["settings"]["login_max_failures"] = json!(3);
+    f.state
+        .database
+        .save_record("account-settings", &record)
+        .await
+        .unwrap();
+    config.security.login_max_failures = 3;
+    drop(config);
+    let snapshot = reader.await.unwrap();
+    assert_eq!(snapshot["revision"], 2);
+    assert_eq!(snapshot["settings"]["login_max_failures"], 3);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn changing_mail_provider_never_reuses_the_previous_provider_credentials() {
+    let f = Fixture::new(true).await;
+    let login = f.login(true).await;
+    let cookies = test_security::cookie_header(&login.headers);
+    let endpoint = "/api/v1/admin/account-settings";
+    let mut view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    view["settings"]["mail_provider"] = json!("brevo");
+    view["settings"]["smtp_from"] = json!("noreply@example.test");
+    let saved = f.request("PUT", endpoint, Some(&cookies), json!({"revision":view["revision"],"settings":view["settings"],"secret_updates":{"smtp_username":"brevo-login","smtp_password":"brevo-password"}})).await;
+    assert_eq!(saved.status, StatusCode::OK, "{}", saved.body);
+    view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    let mut changed = view["settings"].clone();
+    changed["login_max_failures"] = json!(4);
+    assert_eq!(
+        f.request(
+            "PUT",
+            endpoint,
+            Some(&cookies),
+            json!({"revision":view["revision"],"settings":changed})
+        )
+        .await
+        .status,
+        StatusCode::OK
+    );
+    view["settings"]["mail_provider"] = json!("mailjet");
+    let stale = f
+        .request(
+            "PUT",
+            endpoint,
+            Some(&cookies),
+            json!({"revision":view["revision"],"settings":view["settings"]}),
+        )
+        .await;
+    assert_eq!(stale.status, StatusCode::CONFLICT);
+    view = f
+        .request("GET", endpoint, Some(&cookies), Value::Null)
+        .await
+        .body;
+    view["settings"]["mail_provider"] = json!("mailjet");
+    let rejected = f
+        .request(
+            "PUT",
+            endpoint,
+            Some(&cookies),
+            json!({"revision":view["revision"],"settings":view["settings"]}),
+        )
+        .await;
+    assert_eq!(rejected.status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        f.state
+            .config
+            .read()
+            .await
+            .security
+            .smtp_username
+            .as_deref(),
+        Some("brevo-login")
+    );
+    view["settings"]["smtp_enabled"] = json!(false);
+    let disabled = f
+        .request(
+            "PUT",
+            endpoint,
+            Some(&cookies),
+            json!({"revision":view["revision"],"settings":view["settings"]}),
+        )
+        .await;
+    assert_eq!(disabled.status, StatusCode::OK, "{}", disabled.body);
+    let current = f.state.config.read().await;
+    assert!(current.security.smtp_username.is_none() && current.security.smtp_password.is_none());
 }

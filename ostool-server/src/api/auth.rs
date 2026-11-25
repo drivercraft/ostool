@@ -356,6 +356,7 @@ fn is_public_path(path: &str) -> bool {
         || path == "/api/v1/auth/login"
         || path == "/api/v1/auth/captcha"
         || path == "/api/v1/auth/email-code"
+        || path == "/api/v1/auth/registration-email/verify"
         || path == "/api/v1/auth/password-reset"
         || path == "/api/v1/auth/mfa/verify"
         || path == "/api/v1/auth/refresh"
@@ -583,13 +584,6 @@ async fn register(
     }
     crate::security::store::limit(&state.security_cache, "register-ip", &client.ip, 6, 3600)
         .await?;
-    crate::security::captcha::verify(
-        &state,
-        &client,
-        crate::security::captcha::HumanAction::Register,
-        &request.verification,
-    )
-    .await?;
     crate::security::crypto::validate_password(&request.password)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     if request
@@ -601,7 +595,7 @@ async fn register(
     }
     let email = crate::persistence::postgres::normalize_email(&request.email)
         .map_err(|_| ApiError::bad_request("邮箱格式无效"))?;
-    // Consume optional one-time email proof before creating the account.
+    // Precheck the email proof; account creation consumes it transactionally.
     let verified = crate::security::mail::registration_proof(
         &state,
         &email,
@@ -609,8 +603,21 @@ async fn register(
         request.email_code.as_deref(),
     )
     .await?;
+    // Every registration needs either a valid email proof (issued after CAPTCHA) or a fresh CAPTCHA.
+    if !verified {
+        crate::security::captcha::verify(
+            &state,
+            &client,
+            crate::security::captcha::HumanAction::Register,
+            &request.verification,
+        )
+        .await?;
+    }
     let user = super::site::register(&state, &request, &client, &email, verified).await?;
-    state.admin_events.invalidate(&["users"]);
+    if verified && let Some(id) = request.email_challenge_id {
+        state.dev_registration_codes.remove(id).await;
+    }
+    state.admin_events.invalidate(&["users", "mail_deliveries"]);
     let mut response = crate::security::mfa::begin_login(
         &state,
         user,

@@ -1,3 +1,6 @@
+import { HumanVerificationTest } from "@/apps/admin/components/human-verification-test";
+import { parseVerificationHostnames } from "@/human-verification";
+import { useCountdown } from "@/components/security-hooks";
 import { MessageToast } from "@/components/message-toast";
 import { usePermissions } from "@/components/permissions";
 import { Badge } from "@/components/ui/badge";
@@ -354,6 +357,25 @@ function ServerForm({ source }: { source: AdminServerConfigResponse }) {
           </ReloadNotice>
         )}
         <fieldset disabled={!can("server.manage")}>
+          <Section title="审计日志保留">
+            <TextField
+              label="保留天数"
+              type="number"
+              min={0}
+              max={3650}
+              step={1}
+              required
+              value={config.audit_retention_days}
+              disabled={!can("audits.manage")}
+              hint="0 表示永久保留；1–3650 天。每小时清理任务会读取最新策略。"
+              onValue={(value) =>
+                setConfig((current) => ({
+                  ...current,
+                  audit_retention_days: Number(value),
+                }))
+              }
+            />
+          </Section>
           <Section title="网络与上传">
             <SelectField
               label="网络接口"
@@ -465,6 +487,12 @@ const policySections: Record<
       title: "账号与注册",
       fields: [
         {
+          key: "dev_registration_codes",
+          label: "本地调试注册码",
+          type: "check",
+          hint: "模拟注册邮件，可在邮件投递记录查看有效注册码，无需 SMTP；找回密码仍需邮件。仅用于本地调试，API 须回环监听。",
+        },
+        {
           key: "allow_registration",
           label: "允许站点用户注册",
           type: "check",
@@ -480,13 +508,20 @@ const policySections: Record<
           key: "registration_email_verification",
           label: "注册要求邮箱验证",
           type: "check",
-          hint: "默认关闭；开启前须完成 SMTP 配置，图形验证码仍然必须验证。",
+          hint: "默认关闭；开启前须配置邮件服务或启用本地调试注册码；发送注册邮件时仍需完成人机验证。",
         },
       ],
     },
     {
       title: "登录与会话",
       fields: [
+        {
+          key: "admin_allowed_networks",
+          label: "允许访问后台的网段",
+          type: "list",
+          hint: "填写 IPv4/IPv6 CIDR，逗号或换行分隔；留空不限制。保存时须包含当前管理员来源，防止锁定后台访问。",
+          placeholder: "192.168.1.0/24, 127.0.0.1/32",
+        },
         {
           key: "login_max_failures",
           label: "登录失败锁定阈值",
@@ -544,16 +579,16 @@ const policySections: Record<
           key: "captcha_provider",
           label: "人机验证方式",
           type: "select",
-          hint: "网站和后台统一使用；图形验证码无需第三方服务。",
+          hint: "网站和后台统一使用；本地图形验证码由服务器自行生成，无需第三方服务。Cloudflare 请使用 Managed 模式组件。",
           options: [
-            { value: "image", label: "图形验证码" },
+            { value: "image", label: "本地图形验证码（自定义）" },
             { value: "turnstile", label: "Cloudflare Turnstile" },
           ],
         },
         {
           key: "turnstile_site_key",
           label: "Turnstile 站点密钥",
-          hint: "Cloudflare 提供的公开 Site Key；服务端 Secret 通过 .env 配置。",
+          hint: "Cloudflare 提供的公开 Site Key；Secret Key 在下方加密保存，保存后可测试验证。",
           placeholder: "0x4AAAA...",
         },
         {
@@ -561,7 +596,7 @@ const policySections: Record<
           type: "list",
           fullWidth: true,
           label: "允许的验证域名",
-          hint: "多个域名以英文逗号分隔，不填写协议、端口或通配符，须与 Cloudflare 配置一致。",
+          hint: "多个域名用空格、换行或逗号分隔，不含协议、端口或通配符，须覆盖网站和后台访问域名。",
           placeholder: "boards.example.com, admin.example.com",
         },
         {
@@ -581,7 +616,33 @@ const policySections: Record<
           key: "smtp_enabled",
           label: "启用邮件服务",
           type: "check",
-          hint: "停用后隐藏邮箱验证与找回密码入口；要求注册邮箱验证时不能停用。",
+          hint: "停用后隐藏邮箱验证与找回密码入口；本地调试注册码在登录与安全设置中控制。",
+        },
+        {
+          key: "mail_provider",
+          label: "邮件服务商",
+          type: "select",
+          options: [
+            { value: "smtp", label: "自定义 SMTP" },
+            { value: "brevo", label: "Brevo" },
+            { value: "mailjet", label: "Mailjet" },
+            { value: "ses", label: "Amazon SES" },
+          ],
+          hint: "服务商自动使用 STARTTLS/587；切换服务商须重新填写认证凭据。自定义 SMTP 使用下方连接设置。",
+        },
+        {
+          key: "ses_region",
+          label: "SES 区域",
+          placeholder: "us-east-1",
+          hint: "仅 Amazon SES 使用；填写已验证发件人及 SMTP 凭据所在区域。",
+        },
+        {
+          key: "mail_hourly_limit",
+          label: "全站每小时邮件额度",
+          type: "number",
+          min: 1,
+          max: 100000,
+          hint: "所有用途共用；失败也计入额度，防止分散 IP 和邮箱耗尽服务商配额。",
         },
         {
           key: "smtp_host",
@@ -609,12 +670,6 @@ const policySections: Record<
           ],
         },
         {
-          key: "smtp_username",
-          label: "SMTP 用户名",
-          hint: "服务商提供的认证账号，通常为完整邮箱；密码在下方单独设置，更改后保存即可生效。",
-          placeholder: "noreply@example.com",
-        },
-        {
           key: "smtp_from",
           label: "发件人",
           hint: "使用邮箱或“名称 <邮箱>”格式，须符合服务商发件域名要求。",
@@ -632,6 +687,20 @@ const policySections: Record<
     },
   ],
 };
+function DevelopmentRegistrationCode({
+  code,
+}: {
+  code: import("@/types/api").MailDelivery["development_code"];
+}) {
+  const remaining = useCountdown(code ? Date.parse(code.expires_at) : 0);
+  return code && remaining > 0 ? (
+    <span>
+      <code>{code.value}</code> · {remaining} 秒
+    </span>
+  ) : (
+    <span>—</span>
+  );
+}
 export function Accounts({ group }: { group: "security" | "email" }) {
   const source = useResource("account_settings");
   return source ? (
@@ -658,6 +727,9 @@ function AccountForm({
   >({});
   const [keywordDraft, setKeywordDraft] = useState<
     Partial<Record<keyof import("@/types/api").NamePolicy, string>>
+  >({});
+  const [listDraft, setListDraft] = useState<
+    Partial<Record<"admin_allowed_networks" | "turnstile_hostnames", string>>
   >({});
   const [secretDraft, setSecretDraft] = useState<
     import("@/types/api").SecretUpdates
@@ -687,6 +759,7 @@ function AccountForm({
       setBaselineRevision(source.revision);
       setDraft({});
       setKeywordDraft({});
+      setListDraft({});
       setSecretDraft({});
       setAwaiting(0);
     }
@@ -699,8 +772,28 @@ function AccountForm({
       setBaseline(source.settings);
       setBaselineRevision(source.revision);
     }
+    if (key === "mail_provider" && value !== current.mail_provider) {
+      setSecretDraft((old) => {
+        const next = { ...old };
+        delete next.smtp_username;
+        delete next.smtp_password;
+        delete next.clear_smtp_username;
+        delete next.clear_smtp_password;
+        return next;
+      });
+    }
     setDraft((d) => ({ ...d, [key]: value }));
   };
+  const secretKeys =
+    group === "email"
+      ? (["smtp_username", "smtp_password"] as const)
+      : (["turnstile_secret"] as const);
+  const secretConfigured = (
+    key: "smtp_username" | "smtp_password" | "turnstile_secret",
+  ) =>
+    source.secrets[key] &&
+    (key === "turnstile_secret" ||
+      current.mail_provider === source.settings.mail_provider);
   return (
     <PagePanel
       footer={
@@ -718,6 +811,7 @@ function AccountForm({
             onClick={() => {
               setDraft({});
               setKeywordDraft({});
+              setListDraft({});
               setSecretDraft({});
               setAwaiting(0);
               setBaseline(source.settings);
@@ -765,6 +859,16 @@ function AccountForm({
           {policySections[group].map((section) => (
             <Section key={section.title} title={section.title}>
               {section.fields.map((field) => {
+                if (
+                  group === "email" &&
+                  ((["smtp_host", "smtp_port", "smtp_tls"].includes(
+                    field.key,
+                  ) &&
+                    current.mail_provider !== "smtp") ||
+                    (field.key === "ses_region" &&
+                      current.mail_provider !== "ses"))
+                )
+                  return null;
                 const value = current[field.key];
                 if (field.type === "check")
                   return (
@@ -799,23 +903,28 @@ function AccountForm({
                     max={field.max}
                     step={field.type === "number" ? 1 : undefined}
                     value={
-                      Array.isArray(value)
-                        ? value.join(", ")
+                      field.type === "list"
+                        ? (listDraft[
+                            field.key as
+                              "admin_allowed_networks" | "turnstile_hostnames"
+                          ] ?? (Array.isArray(value) ? value.join(", ") : ""))
                         : String(value ?? "")
                     }
-                    onValue={(v) =>
+                    onValue={(v) => {
+                      if (field.type === "list")
+                        setListDraft((current) => ({
+                          ...current,
+                          [field.key]: v,
+                        }));
                       change(
                         field.key,
                         field.type === "number"
                           ? Number(v)
                           : field.type === "list"
-                            ? v
-                                .split(",")
-                                .map((s) => s.trim())
-                                .filter(Boolean)
+                            ? parseVerificationHostnames(v)
                             : v || null,
-                      )
-                    }
+                      );
+                    }}
                     required={field.type === "number"}
                   />
                 );
@@ -851,29 +960,32 @@ function AccountForm({
             </Section>
           ))}
           <Section
-            title={group === "email" ? "邮件认证密码" : "人机验证服务密钥"}
+            title={group === "email" ? "邮件认证凭据" : "人机验证服务密钥"}
           >
-            {(
-              [
-                group === "email" ? "smtp_password" : "turnstile_secret",
-              ] as const
-            ).map((key) => (
+            {secretKeys.map((key) => (
               <div key={key}>
+                <Badge
+                  variant={secretConfigured(key) ? "success" : "secondary"}
+                >
+                  {secretConfigured(key) ? "已配置" : "未配置"}
+                </Badge>
                 <TextField
                   label={
-                    key === "smtp_password"
-                      ? "SMTP 密码"
-                      : "Turnstile 服务端密钥"
+                    key === "smtp_username"
+                      ? "SMTP 账号 / API Key"
+                      : key === "smtp_password"
+                        ? "SMTP 密码 / Secret Key"
+                        : "Turnstile Secret Key"
                   }
                   type="password"
                   autoComplete="new-password"
-                  maxLength={4096}
-                  placeholder={
-                    source.secrets[key]
-                      ? "已配置；留空保留原值，输入新值可替换"
-                      : "未配置；输入密钥后保存"
+                  maxLength={key === "smtp_username" ? 320 : 4096}
+                  placeholder="留空保留原值；输入新值后保存替换"
+                  hint={
+                    key === "smtp_username"
+                      ? "Brevo 填 SMTP login；Mailjet 填 API Key；SES 填区域 SMTP 用户名。凭据加密存储，保存后只显示配置状态。"
+                      : "凭据加密存储，保存后不回显；勾选清除并保存可删除。"
                   }
-                  hint="密钥加密存储，不回显原值。"
                   value={secretDraft[key] ?? ""}
                   disabled={
                     !source.secrets.mfa_key || !!secretDraft[`clear_${key}`]
@@ -888,12 +1000,14 @@ function AccountForm({
                 />
                 <CheckField
                   label={
-                    key === "smtp_password"
-                      ? "清除已保存的 SMTP 密码"
-                      : "清除已保存的 Turnstile 密钥"
+                    key === "smtp_username"
+                      ? "清除已保存的 SMTP 账号 / API Key"
+                      : key === "smtp_password"
+                        ? "清除已保存的 SMTP 密码 / Secret Key"
+                        : "清除已保存的 Turnstile 密钥"
                   }
                   checked={!!secretDraft[`clear_${key}`]}
-                  disabled={!source.secrets[key]}
+                  disabled={!secretConfigured(key)}
                   onChange={(value) => {
                     if (!dirty) {
                       setBaseline(source.settings);
@@ -917,8 +1031,8 @@ function AccountForm({
           {group === "email" &&
             (
               [
-                ["registration_email_policy", "注册邮箱验证码"],
-                ["email_policy", "账号邮箱验证与密码恢复"],
+                ["registration_email_policy", "注册邮箱验证码（额外限制）"],
+                ["email_policy", "所有邮件共用限制与账号邮箱验证"],
               ] as const
             ).map(([key, title]) => (
               <Section title={title} key={key}>
@@ -987,6 +1101,22 @@ function AccountForm({
             ))}
         </fieldset>
       </form>
+      {group === "security" && (
+        <HumanVerificationTest
+          revision={source.revision}
+          disabled={
+            dirty ||
+            task.pending ||
+            awaiting > source.revision ||
+            !can("security.manage")
+          }
+        />
+      )}
+      {group === "email" && source.settings.dev_registration_codes && (
+        <Notice>
+          本地调试注册码已启用：注册邮件模拟发送，可在“邮件投递记录”查看有效注册码。注册码只保存在当前进程内存中，重启后需重新获取；找回密码仍需邮件服务。
+        </Notice>
+      )}
       {group === "email" && (
         <div className="settings-history-entry">
           <RowAction
@@ -995,7 +1125,9 @@ function AccountForm({
             onClick={() => setHistoryOpen(true)}
           />
           <span className="panel-status">
-            最近 100 次投递，不记录正文或验证码
+            {source.settings.dev_registration_codes
+              ? "最近 100 次投递，可查看有效的调试注册码"
+              : "最近 100 次投递，不记录正文或验证码"}
           </span>
         </div>
       )}
@@ -1006,12 +1138,23 @@ function AccountForm({
           </DialogHeader>
           <DialogBody>
             <DialogDescription>
-              最近 100 次投递，仅保留用途、收件人、结果与时间。
+              {source.settings.dev_registration_codes &&
+                "本地模拟记录可查看有效注册码；只在进程内存保留，用后或过期隐藏。"}
+              最近 100 次投递，不保存邮件正文。“SMTP
+              已接受”不代表已到达收件箱；发送中断不会自动重试。
             </DialogDescription>
             <div className="legal-history-scroll">
               <DataTable
                 layout="table"
-                headers={["用途", "收件邮箱", "状态", "时间"]}
+                headers={[
+                  "用途",
+                  "收件邮箱",
+                  "状态",
+                  ...(source.settings.dev_registration_codes
+                    ? ["调试注册码"]
+                    : []),
+                  "时间",
+                ]}
                 empty={!deliveries.length}
               >
                 {deliveries.map((mail) => (
@@ -1028,15 +1171,22 @@ function AccountForm({
                               : "warning"
                         }
                       >
-                        {
-                          {
-                            sending: "发送中",
-                            sent: "已发送",
-                            failed: "发送失败",
-                          }[mail.status]
-                        }
+                        {mail.transport === "development"
+                          ? "本地模拟"
+                          : {
+                              sending: "发送中",
+                              sent: "SMTP 已接受",
+                              failed: "发送失败",
+                            }[mail.status]}
                       </Badge>
                     </Cell>
+                    {source.settings.dev_registration_codes && (
+                      <Cell>
+                        <DevelopmentRegistrationCode
+                          code={mail.development_code}
+                        />
+                      </Cell>
+                    )}
                     <Cell>{new Date(mail.created_at).toLocaleString()}</Cell>
                   </Row>
                 ))}

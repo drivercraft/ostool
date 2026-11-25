@@ -32,6 +32,119 @@ describe("api client", () => {
     vi.unstubAllGlobals();
   });
 
+  it("prechecks registration email without submitting account credentials", async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ verified: true }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      api.verifyRegistrationEmail("member@example.test", "challenge", "123456"),
+    ).resolves.toEqual({ verified: true });
+    const [path, options] = fetch.mock.calls[0];
+    expect(path).toBe("/api/v1/auth/registration-email/verify");
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(options.body)).toEqual({
+      email: "member@example.test",
+      challenge_id: "challenge",
+      code: "123456",
+    });
+  });
+  it("exposes server retry-after for registration resend cooldowns", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(
+            JSON.stringify({ code: "rate_limited", message: "wait" }),
+            { status: 429, headers: { "Retry-After": "90" } },
+          ),
+        ),
+    );
+    await expect(
+      api.emailCode("member@example.test", "register", {}),
+    ).rejects.toMatchObject({ status: 429, retryAfterSeconds: 90 });
+  });
+  it("loads and verifies configuration challenges only through administrator endpoints", async () => {
+    const id = "00000000-0000-4000-8000-000000000001";
+    const challenge = {
+      id,
+      action: "configuration_test",
+      provider: "image",
+      image_data_url: "data:image/png;base64,iVBORw==",
+      expires_in: 120,
+    };
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(challenge), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ verified: true }), { status: 200 }),
+      );
+    vi.stubGlobal("fetch", fetch);
+    await expect(api.configurationCaptcha()).resolves.toEqual(challenge);
+    await api.verifyConfigurationCaptcha({
+      captcha_id: id,
+      captcha_code: "AB29Q",
+    });
+    expect(fetch.mock.calls[0][0]).toBe(
+      "/api/v1/admin/account-settings/captcha",
+    );
+    expect(fetch.mock.calls[1][0]).toBe(
+      "/api/v1/admin/account-settings/captcha/verify",
+    );
+    expect(JSON.parse(fetch.mock.calls[1][1].body)).toEqual({
+      captcha_id: id,
+      captcha_code: "AB29Q",
+    });
+  });
+  it("rejects a challenge for another purpose before presenting it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            id: "00000000-0000-4000-8000-000000000001",
+            action: "password_reset",
+            provider: "image",
+            image_data_url: "data:image/png;base64,iVBORw==",
+            expires_in: 120,
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    await expect(api.captcha("registration_email")).rejects.toThrow(
+      "人机验证配置无效",
+    );
+  });
+  it("distinguishes an invalid Cloudflare configuration from a wrong CAPTCHA answer", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            code: "captcha_configuration_invalid",
+            message: "unavailable",
+          }),
+          { status: 503 },
+        ),
+      ),
+    );
+    await expect(
+      api.verifyConfigurationCaptcha({
+        captcha_id: "proof",
+        captcha_code: "token",
+      }),
+    ).rejects.toMatchObject({
+      code: "captcha_configuration_invalid",
+      status: 503,
+      message: expect.stringContaining("Site Key 和 Secret Key"),
+    });
+  });
   it("preserves the login on refresh outages and clears it only after confirmed rejection", async () => {
     window.history.replaceState({}, "", "/qcl/overview");
     const key = "ostool.admin.session-state";

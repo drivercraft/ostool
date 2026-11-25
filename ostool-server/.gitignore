@@ -1,1 +1,6 @@
-webui/node_modules
+/webui/node_modules
+/.env
+/.env.*
+!/.env.deploy
+!/.env.dev
+/.ostool-server-dev/

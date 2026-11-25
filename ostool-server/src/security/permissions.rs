@@ -462,6 +462,9 @@ pub fn required(method: &Method, path: &str) -> Option<&'static str> {
                 "server.manage"
             }
         }
+        "account-settings" if tail.ends_with("/captcha") || tail.ends_with("/captcha/verify") => {
+            "security.manage"
+        }
         "account-settings" => {
             if read {
                 "security.read"
@@ -510,6 +513,24 @@ pub async fn catalog(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn human_configuration_tests_require_manage_permission_even_when_loading_the_widget() {
+        assert_eq!(
+            required(&Method::GET, "/api/v1/admin/account-settings/captcha"),
+            Some("security.manage")
+        );
+        assert_eq!(
+            required(
+                &Method::POST,
+                "/api/v1/admin/account-settings/captcha/verify"
+            ),
+            Some("security.manage")
+        );
+        assert_eq!(
+            required(&Method::GET, "/api/v1/admin/account-settings"),
+            Some("security.read")
+        );
+    }
     #[test]
     fn approval_free_use_requires_a_separate_role_grant() {
         let ordinary = expand(&["board.use".into(), "rental.request".into()]).unwrap();

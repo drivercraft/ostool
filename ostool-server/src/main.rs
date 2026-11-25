@@ -275,9 +275,6 @@ async fn start_audit_retention(state: &ostool_server::AppState) {
         serde_json::json!({"version":env!("CARGO_PKG_VERSION")}),
     )
     .await;
-    let Some(days) = state.config.read().await.audit.retention_days else {
-        return;
-    };
     state
         .monitor
         .register("audit_retention", "审计日志保留策略", 3600);
@@ -285,6 +282,9 @@ async fn start_audit_retention(state: &ostool_server::AppState) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(3600)).await;
+            let Some(days) = state.config.read().await.audit.retention_days else {
+                continue;
+            };
             let start = std::time::Instant::now();
             state.monitor.task_started("audit_retention");
             let result = ostool_server::audit::run_retention(&state, days).await;

@@ -50,6 +50,7 @@ pub(crate) fn apply_values(
     config: &mut ServerConfig,
     values: &BTreeMap<String, String>,
 ) -> anyhow::Result<()> {
+    reject_runtime_settings(values)?;
     apply_database_values(&mut config.database, values)?;
     if let Some(path) = values.get("OSTOOL_DATA_DIR") {
         config.data_dir = path.into();
@@ -58,9 +59,6 @@ pub(crate) fn apply_values(
         if let crate::TftpConfig::Builtin(tftp) = &mut config.tftp {
             tftp.root_dir = config.data_dir.join("tftp");
         }
-    }
-    if let Some(interface) = values.get("OSTOOL_NETWORK_INTERFACE") {
-        config.network.interface = interface.clone();
     }
     parsed(
         values,
@@ -85,10 +83,6 @@ pub(crate) fn apply_values(
             addr.parse()
                 .context("invalid OSTOOL_HTTP_BOOT_LISTEN_ADDR")?,
         );
-    }
-    if let crate::TftpConfig::Builtin(tftp) = &mut config.tftp {
-        parsed(values, "OSTOOL_TFTP_ENABLED", &mut tftp.enabled)?;
-        parsed(values, "OSTOOL_TFTP_BIND_ADDR", &mut tftp.bind_addr)?;
     }
     parsed(
         values,
@@ -155,12 +149,6 @@ pub(crate) fn apply_values(
             .collect();
     }
     parsed(values, "OSTOOL_EDITION", &mut config.edition)?;
-    if let Some(value) = values.get("OSTOOL_AUDIT_RETENTION_DAYS") {
-        let days: u32 = value
-            .parse()
-            .context("invalid OSTOOL_AUDIT_RETENTION_DAYS")?;
-        config.audit.retention_days = (days > 0).then_some(days);
-    }
     if let Some(value) = values.get("OSTOOL_TRUSTED_PROXY_IPS") {
         config.audit.trusted_proxies = value
             .split(',')
@@ -171,34 +159,7 @@ pub(crate) fn apply_values(
     }
     parsed(values, "OSTOOL_LISTEN_ADDR", &mut config.listen_addr)?;
     let expected_auth = config.edition.is_public();
-    if let Some(value) = values.get("OSTOOL_AUTH_ENABLED") {
-        let enabled: bool = value.parse().context("invalid OSTOOL_AUTH_ENABLED")?;
-        anyhow::ensure!(
-            enabled == expected_auth,
-            "OSTOOL_AUTH_ENABLED must match OSTOOL_EDITION (local=false, public=true)"
-        );
-    }
     config.auth.enabled = expected_auth;
-    parsed(
-        values,
-        "OSTOOL_ALLOW_REGISTRATION",
-        &mut config.auth.allow_registration,
-    )?;
-    parsed(
-        values,
-        "OSTOOL_ACCESS_TOKEN_TTL_SECS",
-        &mut config.auth.access_token_ttl_secs,
-    )?;
-    parsed(
-        values,
-        "OSTOOL_REFRESH_TOKEN_TTL_SECS",
-        &mut config.auth.refresh_token_ttl_secs,
-    )?;
-    parsed(
-        values,
-        "OSTOOL_DEVICE_CODE_TTL_SECS",
-        &mut config.auth.device_code_ttl_secs,
-    )?;
     parsed(
         values,
         "OSTOOL_NETWORK_TEST_ENABLED",
@@ -269,12 +230,6 @@ fn apply_security_values(
     for (key, target) in [
         ("OSTOOL_REDIS_URL", &mut config.redis_url),
         ("OSTOOL_MFA_ENCRYPTION_KEY", &mut config.mfa_encryption_key),
-        ("OSTOOL_TURNSTILE_SITE_KEY", &mut config.turnstile_site_key),
-        ("OSTOOL_TURNSTILE_SECRET", &mut config.turnstile_secret),
-        ("OSTOOL_SMTP_HOST", &mut config.smtp_host),
-        ("OSTOOL_SMTP_USERNAME", &mut config.smtp_username),
-        ("OSTOOL_SMTP_PASSWORD", &mut config.smtp_password),
-        ("OSTOOL_SMTP_FROM", &mut config.smtp_from),
     ] {
         if let Some(value) = values.get(key) {
             anyhow::ensure!(!value.trim().is_empty(), "{key} must not be empty");
@@ -284,67 +239,62 @@ fn apply_security_values(
     if let Some(value) = values.get("OSTOOL_REDIS_PREFIX") {
         config.redis_prefix = value.clone();
     }
-    if let Some(value) = values.get("OSTOOL_CAPTCHA_PROVIDER") {
-        config.captcha_provider = match value.as_str() {
-            "image" => crate::security::config::CaptchaProvider::Image,
-            "turnstile" => crate::security::config::CaptchaProvider::Turnstile,
-            _ => bail!("OSTOOL_CAPTCHA_PROVIDER must be image or turnstile"),
-        };
-    }
-    if let Some(value) = values.get("OSTOOL_SMTP_TLS") {
-        config.smtp_tls = match value.as_str() {
-            "starttls" => crate::security::config::SmtpTls::Starttls,
-            "tls" => crate::security::config::SmtpTls::Tls,
-            "loopback_plaintext" => crate::security::config::SmtpTls::LoopbackPlaintext,
-            _ => bail!("invalid OSTOOL_SMTP_TLS"),
-        };
-    }
-    for (key, target) in [
-        (
-            "OSTOOL_ADMIN_ALLOWED_NETWORKS",
-            &mut config.admin_allowed_networks,
-        ),
-        (
-            "OSTOOL_TURNSTILE_HOSTNAMES",
-            &mut config.turnstile_hostnames,
-        ),
-    ] {
-        if let Some(value) = values.get(key) {
-            *target = value
-                .split(',')
-                .map(str::trim)
-                .filter(|v| !v.is_empty())
-                .map(str::to_owned)
-                .collect();
+    Ok(())
+}
+fn reject_runtime_settings(values: &BTreeMap<String, String>) -> anyhow::Result<()> {
+    for key in values.keys() {
+        if key.starts_with("OSTOOL_TFTP_")
+            || key == "OSTOOL_NETWORK_INTERFACE"
+            || key.starts_with("OSTOOL_SMTP_")
+            || key.starts_with("OSTOOL_TURNSTILE_")
+            || key.starts_with("OSTOOL_MAIL_")
+            || key.starts_with("OSTOOL_SES_")
+            || matches!(
+                key.as_str(),
+                "OSTOOL_AUTH_ENABLED"
+                    | "OSTOOL_CAPTCHA_PROVIDER"
+                    | "OSTOOL_ALLOW_REGISTRATION"
+                    | "OSTOOL_DEV_REGISTRATION_CODES"
+                    | "OSTOOL_REQUIRE_ADMIN_MFA"
+                    | "OSTOOL_REGISTRATION_EMAIL_VERIFICATION"
+                    | "OSTOOL_LOGIN_MAX_FAILURES"
+                    | "OSTOOL_LOGIN_LOCK_SECS"
+                    | "OSTOOL_ACCESS_TOKEN_TTL_SECS"
+                    | "OSTOOL_REFRESH_TOKEN_TTL_SECS"
+                    | "OSTOOL_DEVICE_CODE_TTL_SECS"
+                    | "OSTOOL_ADMIN_ALLOWED_NETWORKS"
+                    | "OSTOOL_AUDIT_RETENTION_DAYS"
+            )
+        {
+            bail!("{key} 已移至管理后台系统设置，请从启动环境中移除并在后台配置");
         }
     }
-    parsed(
-        values,
-        "OSTOOL_REQUIRE_ADMIN_MFA",
-        &mut config.require_admin_mfa,
-    )?;
-    parsed(
-        values,
-        "OSTOOL_REGISTRATION_EMAIL_VERIFICATION",
-        &mut config.registration_email_verification,
-    )?;
-    parsed(
-        values,
-        "OSTOOL_LOGIN_MAX_FAILURES",
-        &mut config.login_max_failures,
-    )?;
-    parsed(
-        values,
-        "OSTOOL_LOGIN_LOCK_SECS",
-        &mut config.login_lock_secs,
-    )?;
-    parsed(values, "OSTOOL_SMTP_PORT", &mut config.smtp_port)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn runtime_business_settings_are_rejected_without_disclosing_values() {
+        for key in [
+            "OSTOOL_SMTP_PASSWORD",
+            "OSTOOL_CAPTCHA_PROVIDER",
+            "OSTOOL_MAIL_PROVIDER",
+            "OSTOOL_DEV_REGISTRATION_CODES",
+            "OSTOOL_ADMIN_ALLOWED_NETWORKS",
+            "OSTOOL_AUDIT_RETENTION_DAYS",
+        ] {
+            let error = apply_values(
+                &mut ServerConfig::default(),
+                &BTreeMap::from([(key.into(), "sensitive-value".into())]),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(error.contains(key));
+            assert!(!error.contains("sensitive-value"));
+        }
+    }
     #[test]
     fn env_boot_settings_cover_hardware_without_enabling_it_implicitly() {
         let mut config = ServerConfig::default();
@@ -354,7 +304,6 @@ mod tests {
             &BTreeMap::from([
                 ("OSTOOL_DATA_DIR".into(), "/tmp/env-only-fixture".into()),
                 ("OSTOOL_LISTEN_ADDR".into(), "127.0.0.1:2999".into()),
-                ("OSTOOL_NETWORK_INTERFACE".into(), "lo".into()),
                 ("OSTOOL_LOADER_NETWORK_ENABLED".into(), "false".into()),
                 ("OSTOOL_HTTP_BOOT_ENABLED".into(), "false".into()),
                 ("OSTOOL_NETWORK_TEST_ENABLED".into(), "false".into()),
@@ -438,7 +387,6 @@ mod tests {
             &mut config,
             &BTreeMap::from([
                 ("OSTOOL_EDITION".into(), "public".into()),
-                ("OSTOOL_AUTH_ENABLED".into(), "true".into()),
                 (
                     "OSTOOL_DATABASE_URL".into(),
                     "postgres://localhost/test".into(),

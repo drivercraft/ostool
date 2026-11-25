@@ -237,7 +237,8 @@ pub async fn transport(
         log::error!("request {request_id} {path} failed: {}", response.status());
     }
     let config = state.config.read().await;
-    let cloudflare = config.security.captcha_provider == super::config::CaptchaProvider::Turnstile;
+    // Public settings can switch providers in place; the loaded document must already allow the widget.
+    let cloudflare = config.edition.is_public();
     let third = if cloudflare {
         " https://challenges.cloudflare.com"
     } else {

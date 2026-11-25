@@ -4,20 +4,20 @@
 
 ### 1.1 入口与发现
 
-设备控制唯一使用协议 v7。公网用户 HTTPS 与服务器到设备的内网通信独立。
-axloader 原生使用内网 HTTP，无需 HTTPS 或 Bearer。管理员先创建板卡并绑定 MAC，
-可在“设备认证”中配置固定 `http://设备内网IP:端口`，也可启用
-`OSTOOL_LOADER_NETWORK_ENABLED=true` 接收 UDP 2998 上的发现报文。
-发现使用报文来源内网 IP 和上报端口，核对实际设备 MAC 与启动代次；旧 poll/status 回调不恢复。
-支持 HTTPS 的设备仍可配置证书与可选加密凭据，接口不返回 token。
-设备 `/status` 必须报告协议 v7；boot、serial 和 OTA 写请求携带
-`X-Axloader-Protocol-Version: 7`。架构名称是开放字符串，只用于显示，不是准入条件。
+设备控制唯一使用协议 v7。`network::Announcer` 在同一 UEFI 网卡向 UDP `2998`
+单向广播 v7、MAC、开放架构名称、启动代次和设备 TCP4 端口 `2999`；
+`direct::Listener` 在该端口处理启动与 OTA。ostool-server 的
+`loader::serve_udp_discovery()` 只接入 v7 广播，并调用 `device::reconcile()` 反向
+GET 设备状态，核对 MAC、代次和身份后才从板卡 TOML 中查找当前绑定。架构名称不再是
+接入条件或准入白名单。
+发现不要求服务端响应：直连客户端知道设备 IP 时可独立控制装载器。
 设备没有可写 ESP 或 OTA 状态区时，状态响应中的 `ota` 可以为空；服务端不下发
 升级镜像，并为任务保存可见的等待原因，不按架构判为失败。
 
-现有 axloader 固件可直接通过 UDP/HTTP 接入，无需先增加 TLS 功能。
-U-Boot 保留设备内网 TFTP 高速加载与 YMODEM；串口主要用于启动控制与控制台。
-选择 TFTP 后服务不可用会明确报错，不静默将大镜像改为串口传输。
+广播和 HTTP 没有身份认证。MAC 仅作板卡配置绑定键；报文和镜像的 SHA-256
+仅检验一致性，本阶段限定可信隔离实验网。服务器对重复 MAC 且不同来源 IP
+的在线设备停止下发任务，新的启动代次替代同地址的旧实例；设备拒绝旧代次的
+修改请求。
 
 发现页的“创建配置”链接只携带 MAC，`BoardEditor` 不维护或保存启动架构。
 发现列表只读显示 axloader 上报的架构；编辑页架构取自当前 `/status` 的 `arch`，在线时只读展示，
@@ -41,8 +41,8 @@ PUT 上传，各自按清单长度及 SHA-256 检验，每个文件不超过 256
 设备在 `start` 中一次性解析真实镜像并应用其本地 machine、ELF 结构、装载范围和 EFI
 入口符号规则；拒绝以开放 `{code,message}` 返回并使 boot job 进入 `failed`。
 `Failed` 是该会话串口运行时的终态；关闭和迟到的状态更新均保留最初的错误原因。
-交接前失败会在服务端保留设备原始 `code/message` loader 状态，并在关闭串口 WebSocket 前发送安全错误提示；
-用户 API 隐藏原始错误消息，CLI 保留轮询、WebSocket 关闭及清理期间收到的首个错误，避免会话释放后的 `404` 掩盖它。
+交接前失败会发布设备原始 `code/message` loader 状态，并在关闭串口 WebSocket 前发送具体原因；
+CLI 保留轮询、WebSocket 关闭及清理期间收到的首个实际错误，避免会话释放后的 `404` 掩盖它。
 设备本地 `TargetSpec` 保存实际 machine 和 EFI 符号名；符号表必须保留，设备只在
 `start` 时从目标自身规则解析，不使用 ELF `e_entry` 或 `_start` 代替 EFI ABI 交接。
 `POST /api/v1/boot/jobs/{id}/start` 按设备自身的目标契约校验入口，把 cmdline 安装为 EFI LoadOptions，
@@ -54,7 +54,8 @@ TCP4、UDP4 对象和 UART 身份计时器，进入 UEFI 内核交接。
 sequenceDiagram
     participant L as axloader
     participant S as ostool-server 或直连工具
-    S->>L: HTTP GET /api/v1/status（设备内网，HTTPS/凭据可选）
+    L-->>S: UDP :2998 广播（可选）
+    S->>L: GET /api/v1/status
     S->>L: continue（bound 身份匹配或显式 direct）
     S->>L: POST /api/v1/boot/jobs（v7、X-Boot-Epoch）
     S->>L: PUT kernel；可选 PUT initramfs
@@ -68,7 +69,7 @@ ostool-server 保留原有 Session、串口 WebSocket、启动清单和板卡租
 再调用设备接口；它不把文件 URL 交给装载器。设备在同一 Session 内复位时，
 服务器观察新启动代次并按原 `boot_id` 重新推送。串口在启动前承载本次身份帧，绑定后承载目标系统输出；每次上电都重新验证身份和参数。
 若同一启动代次仍保留其他 `boot_id`，服务器在创建返回 `409` 后按状态中的旧 ID
-删除该事务，再尝试创建一次；第二次仍冲突则停止本次推送，等待后续已认证的设备探测。
+删除该事务，再尝试创建一次；第二次仍冲突则停止本次推送，等待后续设备广播。
 
 ## 2. 设备协议
 
@@ -149,7 +150,7 @@ axloader 的设备端 OTA 实现（如 `ota::OtaContext`）和 A/B 启动器负�
 活动 Session 可以在确认解锁后继续启动。`202` 仅表示暂存，只有新槽实际运行、
 设备持久确认且激活摘要匹配后，服务器任务才变为 `succeeded`。直连升级不会被服务端自动确认。
 
-`device::push_ota_image()` 读取受限设备响应，依据 HTTP 状态分类，而不按设备错误码
+`device::push_ota_image()` 完整读取设备响应，依据 HTTP 状态分类，而不按设备错误码
 推断支持哪些架构。以下响应规则避免把确定性拒绝当作网络错误重复发送完整镜像。
 
 | 设备响应 | 任务与后续投递 |
@@ -159,8 +160,7 @@ axloader 的设备端 OTA 实现（如 `ota::OtaContext`）和 A/B 启动器负�
 | `503` | 显示设备当前缺少 OTA 存储/能力的原因；等待 OTA 状态、能力或启动代次变化，不持续重复 PUT |
 | 网络中断、超时、其他 `5xx` | 持久记录错误并有限退避，最多三次投递失败；结果不确定时先核对设备是否已接受，最后一次也在核对后才判定失败 |
 
-服务端内部 `Job.error` 至少保留 HTTP 状态及设备 `{code,message}` 响应；不启用旧错误形状解析。
-管理 API/SSE 使用安全错误提示，原始细节通过服务器日志排障。
+`Job.error` 至少保留 HTTP 状态及设备 `{code,message}` 响应；不启用旧错误形状解析。
 确定性拒绝的响应体读取失败时仍保留 HTTP 状态和读取
 错误，不重传。已暂存镜像的升级 ID 与本任务匹配时不再次下发，兼容暂存阶段
 `source` 为空的固件；进入试运行后，仍核对来源为 `server` 且运行摘要匹配才确认。重复或旧代次上报不能改写终态或最初的终态失败原因。
@@ -171,15 +171,19 @@ axloader 的设备端 OTA 实现（如 `ota::OtaContext`）和 A/B 启动器负�
 改写设备状态，已进入待试槽但未确认的设备按自身 A/B 规则回滚。
 
 管理端可删除没有被非终态任务引用的镜像；终态任务保留自身的摘要、版本和长度，
-因此删除镜像不破坏历史任务记录。镜像字节、元数据和任务持久化到 PostgreSQL；
-镜像上传和删除通过同一门闩串行，元数据在成功持久化后更新内存投影，
-避免并发上传、删除或指派留下悬空任务。
+因此删除文件不破坏历史任务记录。镜像上传和删除通过同一目录门闩串行，元数据
+列表在启动时载入内存并只在增删成功后更新；这既避免 SSE 快照重复扫描目录，也
+防止并发上传、删除或指派留下只有元数据、只有镜像文件或悬空任务的可见状态。
 
 ## 3. 内建 QEMU 虚拟板
 
 虚拟板默认关闭，当前固定使用 `x86_64 + OVMF + q35 + TCG`。示例服务端配置：
 
 ```toml
+[loader_network]
+enabled = true
+bind_addr = "0.0.0.0:2998"
+
 [virtual_qemu]
 enabled = true
 qemu_binary = "/usr/bin/qemu-system-x86_64"
@@ -198,17 +202,15 @@ cpus = 2
 bridge、TAP 和 dnsmasq，应以具备 Linux `CAP_NET_ADMIN` 的身份运行：
 
 ```bash
-ostool-server --env-file /etc/ostool-server/.env virtual-lab up
-ostool-server --env-file /etc/ostool-server/.env virtual-lab status
-ostool-server --env-file /etc/ostool-server/.env virtual-lab down
+ostool-server --config /etc/ostool-server/config.toml virtual-lab up
+ostool-server --config /etc/ostool-server/config.toml virtual-lab status
+ostool-server --config /etc/ostool-server/config.toml virtual-lab down
 ```
 
 默认客户机网段为 `10.77.0.0/24`，服务端地址为 `10.77.0.1`，dnsmasq/bridge
 地址为 `10.77.0.254`，DHCP 池为 `10.77.0.100-200`。三个子命令均可重复调用。
-当前 axloader 可直接使用虚拟设备网内的 HTTP，无需 TLS 固件。启用 v7 UDP 发现，
-或为板卡配置其虚拟网内 HTTP 地址；再按原有 MAC、串口身份和绑定流程启动。
-控制器探测成功后才显示在线。UDP 广播不会注册设备。MAC 和电源配置必须引用同一个虚拟设备；
-串口 provider 从电源取得，板卡不保存串口配置：
+管理页面启动虚拟设备后，QEMU 必须通过真实 UDP 广播和设备 HTTP 接口出现在
+未绑定列表。绑定时 MAC 和电源配置必须引用同一个虚拟设备；串口 provider 从电源取得，板卡不保存串口配置：
 
 ```toml
 [network_identity]
@@ -228,8 +230,8 @@ hub 保留最近 64 KiB 输出并跨 QEMU 重启，新实例广播新的启动�
 
 验收顺序如下：
 
-1. 准备 v7 axloader 固件，启用设备内网 UDP/HTTP，或配置固定设备内网 HTTP 地址。
-2. 保存板卡 ID、类型、QEMU 电源和 MAC，配置设备认证后启动 QEMU，确认已认证探测显示在线。
+1. 启动未绑定 QEMU，确认它通过真实发现出现在管理页面。
+2. 填写板卡 ID、类型和 QEMU 电源，并选择探测到的 MAC。
 3. 使用 `ostool` 创建 Session、上传内核及可选 initramfs/cmdline，确认设备 HTTP 交接和内核串口标志。
 4. 保持 WebSocket 和 Session，执行虚拟板 `Off -> On`，确认新启动代次重新取得相同启动事务并再次交接。
 5. 关闭 WebSocket，确认 Session 经 `releasing` 回到 `idle` 且 QEMU 退出。
@@ -269,9 +271,7 @@ Session 配置为 `serial: null`，server 必须自动匹配 UART、应用上报
 
 ```bash
 cargo build -p ostool-server
-# 使用独立测试数据库，测试自动创建隔离 schema
-OSTOOL_TEST_DATABASE_URL=postgres://ostool:ostool@127.0.0.1:54328/ostool_tests \
-  python3 ostool-server/scripts/test-axloader-local.py --tgos /path/to/tgoskits-dev
+python3 ostool-server/scripts/test-axloader-local.py --tgos /path/to/tgoskits-dev
 ```
 
 TGOS 单仓用 `cargo xtask axloader test qemu --target x86_64-unknown-uefi` 验证

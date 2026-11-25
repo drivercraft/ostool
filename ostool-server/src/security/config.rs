@@ -19,9 +19,17 @@ pub struct SecurityConfig {
     pub mfa_encryption_key: Option<String>,
     pub require_admin_mfa: bool,
     pub registration_email_verification: bool,
+    /// Runtime policy for local registration testing.
+    pub dev_registration_codes: bool,
     pub login_max_failures: u32,
     pub login_lock_secs: u32,
     pub admin_allowed_networks: Vec<String>,
+    #[serde(default)]
+    pub mail_provider: MailProvider,
+    #[serde(default = "default_ses_region")]
+    pub ses_region: String,
+    #[serde(default = "default_mail_hourly_limit")]
+    pub mail_hourly_limit: u32,
     pub smtp_enabled: bool,
     pub password_reset_enabled: bool,
     pub password_reset_ttl_secs: u32,
@@ -29,6 +37,7 @@ pub struct SecurityConfig {
     pub registration_email_policy: EmailPolicy,
     pub smtp_host: Option<String>,
     pub smtp_port: u16,
+    #[serde(skip_serializing)]
     pub smtp_username: Option<String>,
     #[serde(skip_serializing)]
     pub smtp_password: Option<String>,
@@ -55,6 +64,72 @@ pub enum SmtpTls {
     Tls,
     LoopbackPlaintext,
 }
+/// Managed providers use the same encrypted SMTP credential storage as custom SMTP.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, JsonSchema, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MailProvider {
+    #[default]
+    Smtp,
+    Brevo,
+    Mailjet,
+    Ses,
+}
+fn default_ses_region() -> String {
+    "us-east-1".into()
+}
+fn default_mail_hourly_limit() -> u32 {
+    100
+}
+impl SecurityConfig {
+    pub fn mail_endpoint(&self) -> (String, u16, SmtpTls) {
+        match self.mail_provider {
+            MailProvider::Smtp => (
+                self.smtp_host.clone().unwrap_or_default(),
+                self.smtp_port,
+                self.smtp_tls,
+            ),
+            MailProvider::Brevo => ("smtp-relay.brevo.com".into(), 587, SmtpTls::Starttls),
+            MailProvider::Mailjet => ("in-v3.mailjet.com".into(), 587, SmtpTls::Starttls),
+            MailProvider::Ses => (
+                format!("email-smtp.{}.amazonaws.com", self.ses_region),
+                587,
+                SmtpTls::Starttls,
+            ),
+        }
+    }
+}
+pub fn parse_turnstile_hostnames(value: &str) -> anyhow::Result<Vec<String>> {
+    let mut hosts = Vec::new();
+    for host in value
+        .split(|c: char| c.is_whitespace() || matches!(c, ',' | '，'))
+        .filter(|v| !v.is_empty())
+    {
+        let host = host.to_ascii_lowercase();
+        validate_turnstile_hostname(&host)?;
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
+    ensure!(hosts.len() <= 100, "Turnstile 最多允许 100 个域名");
+    Ok(hosts)
+}
+fn validate_turnstile_hostname(host: &str) -> anyhow::Result<()> {
+    ensure!(
+        !host.is_empty()
+            && host.len() <= 253
+            && host.split('.').all(|label| {
+                !label.is_empty()
+                    && label.len() <= 63
+                    && label.starts_with(|c: char| c.is_ascii_alphanumeric())
+                    && label.ends_with(|c: char| c.is_ascii_alphanumeric())
+                    && label
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+            }),
+        "Turnstile 须填写明确的域名或 IPv4 地址，不含协议、端口、通配符或空域名段"
+    );
+    Ok(())
+}
 impl Default for SecurityConfig {
     fn default() -> Self {
         Self {
@@ -68,9 +143,13 @@ impl Default for SecurityConfig {
             mfa_encryption_key: None,
             require_admin_mfa: false,
             registration_email_verification: false,
+            dev_registration_codes: false,
             login_max_failures: 6,
             login_lock_secs: 900,
             admin_allowed_networks: vec![],
+            mail_provider: MailProvider::Smtp,
+            ses_region: default_ses_region(),
+            mail_hourly_limit: default_mail_hourly_limit(),
             smtp_enabled: true,
             password_reset_enabled: true,
             password_reset_ttl_secs: 600,
@@ -152,25 +231,61 @@ impl SecurityConfig {
                 !self.turnstile_hostnames.is_empty(),
                 "Turnstile requires explicit hostnames"
             );
+            ensure!(
+                self.turnstile_hostnames.len() <= 100,
+                "Turnstile 最多允许 100 个域名"
+            );
             for host in &self.turnstile_hostnames {
+                validate_turnstile_hostname(host)?;
+            }
+            for key in [&self.turnstile_site_key, &self.turnstile_secret]
+                .into_iter()
+                .flatten()
+            {
                 ensure!(
-                    !host.is_empty()
-                        && !host.contains(['/', ':', '*'])
-                        && host
+                    (10..=256).contains(&key.len())
+                        && key
                             .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'),
-                    "invalid Turnstile hostname"
+                            .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'_' | b'-')),
+                    "Turnstile 密钥格式无效"
                 );
             }
         }
         ensure!(
-            !complete || self.smtp_host.is_some() == self.smtp_from.is_some(),
+            !complete
+                || self.mail_provider != MailProvider::Smtp
+                || self.smtp_host.is_some() == self.smtp_from.is_some(),
             "SMTP requires both host and from address"
         );
         ensure!(
             !complete || self.smtp_username.is_some() == self.smtp_password.is_some(),
             "SMTP credentials require both username and password"
         );
+        ensure!(
+            (1..=100000).contains(&self.mail_hourly_limit),
+            "全站邮件小时额度须为 1–100000"
+        );
+        ensure!(
+            self.ses_region.len() <= 40
+                && self.ses_region.split('-').count() >= 3
+                && self
+                    .ses_region
+                    .bytes()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+                && self
+                    .ses_region
+                    .starts_with(|c: char| c.is_ascii_lowercase())
+                && self.ses_region.ends_with(|c: char| c.is_ascii_digit()),
+            "SES region 格式无效"
+        );
+        if complete && self.smtp_enabled && self.mail_provider != MailProvider::Smtp {
+            ensure!(
+                self.smtp_from.is_some()
+                    && self.smtp_username.as_ref().is_some_and(|s| !s.is_empty())
+                    && self.smtp_password.as_ref().is_some_and(|s| !s.is_empty()),
+                "邮件服务商需要发件人、SMTP 用户名和密码"
+            );
+        }
         ensure!(self.smtp_port > 0, "SMTP port must be nonzero");
         if let Some(host) = &self.smtp_host {
             ensure!(
@@ -201,11 +316,12 @@ impl SecurityConfig {
         );
         if complete && self.registration_email_verification {
             ensure!(
-                self.smtp_available(),
-                "email verification requires SMTP host and from address"
+                self.smtp_available() || self.dev_registration_codes,
+                "email verification requires a configured mail provider and sender"
             );
         }
         if complete
+            && self.mail_provider == MailProvider::Smtp
             && self.smtp_tls == SmtpTls::LoopbackPlaintext
             && !matches!(
                 self.smtp_host.as_deref(),
@@ -267,14 +383,26 @@ impl EmailPolicy {
 }
 impl SecurityConfig {
     pub fn smtp_available(&self) -> bool {
-        self.smtp_enabled && self.smtp_host.is_some() && self.smtp_from.is_some()
+        self.smtp_enabled
+            && self.smtp_from.is_some()
+            && match self.mail_provider {
+                MailProvider::Smtp => self.smtp_host.is_some(),
+                _ => {
+                    self.smtp_username.as_ref().is_some_and(|s| !s.is_empty())
+                        && self.smtp_password.as_ref().is_some_and(|s| !s.is_empty())
+                }
+            }
     }
 }
 
-/// 可由后台调整的业务策略；部署连接、网络边界和密钥不进入数据库记录。
+/// 后台业务策略；连接与主加密密钥留在启动配置，业务凭据单独加密保存。
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AccountSettings {
+    #[serde(default)]
+    pub dev_registration_codes: bool,
+    #[serde(default)]
+    pub admin_allowed_networks: Vec<String>,
     #[serde(default)]
     pub name_policy: super::names::NamePolicy,
     pub allow_registration: bool,
@@ -289,10 +417,15 @@ pub struct AccountSettings {
     pub registration_email_verification: bool,
     pub login_max_failures: u32,
     pub login_lock_secs: u32,
+    #[serde(default)]
+    pub mail_provider: MailProvider,
+    #[serde(default = "default_ses_region")]
+    pub ses_region: String,
+    #[serde(default = "default_mail_hourly_limit")]
+    pub mail_hourly_limit: u32,
     pub smtp_enabled: bool,
     pub smtp_host: Option<String>,
     pub smtp_port: u16,
-    pub smtp_username: Option<String>,
     pub smtp_from: Option<String>,
     pub smtp_tls: SmtpTls,
     pub password_reset_enabled: bool,
@@ -303,6 +436,8 @@ pub struct AccountSettings {
 impl AccountSettings {
     pub fn from_config(config: &crate::ServerConfig) -> Self {
         Self {
+            dev_registration_codes: config.security.dev_registration_codes,
+            admin_allowed_networks: config.security.admin_allowed_networks.clone(),
             name_policy: config.security.name_policy.clone(),
             allow_registration: config.auth.allow_registration,
             access_token_ttl_secs: config.auth.access_token_ttl_secs,
@@ -316,10 +451,12 @@ impl AccountSettings {
             registration_email_verification: config.security.registration_email_verification,
             login_max_failures: config.security.login_max_failures,
             login_lock_secs: config.security.login_lock_secs,
+            mail_provider: config.security.mail_provider,
+            ses_region: config.security.ses_region.clone(),
+            mail_hourly_limit: config.security.mail_hourly_limit,
             smtp_enabled: config.security.smtp_enabled,
             smtp_host: config.security.smtp_host.clone(),
             smtp_port: config.security.smtp_port,
-            smtp_username: config.security.smtp_username.clone(),
             smtp_from: config.security.smtp_from.clone(),
             smtp_tls: config.security.smtp_tls,
             password_reset_enabled: config.security.password_reset_enabled,
@@ -330,6 +467,8 @@ impl AccountSettings {
     }
     pub fn apply(&self, config: &mut crate::ServerConfig) -> anyhow::Result<()> {
         self.name_policy.validate()?;
+        config.security.dev_registration_codes = self.dev_registration_codes;
+        config.security.admin_allowed_networks = self.admin_allowed_networks.clone();
         config.security.name_policy = self.name_policy.clone();
         config.auth.allow_registration = self.allow_registration;
         config.auth.access_token_ttl_secs = self.access_token_ttl_secs;
@@ -338,15 +477,18 @@ impl AccountSettings {
         config.auth.max_active_sessions = self.max_active_sessions;
         config.security.captcha_provider = self.captcha_provider;
         config.security.turnstile_site_key = self.turnstile_site_key.clone();
-        config.security.turnstile_hostnames = self.turnstile_hostnames.clone();
+        config.security.turnstile_hostnames =
+            parse_turnstile_hostnames(&self.turnstile_hostnames.join(","))?;
         config.security.require_admin_mfa = self.require_admin_mfa;
         config.security.registration_email_verification = self.registration_email_verification;
         config.security.login_max_failures = self.login_max_failures;
         config.security.login_lock_secs = self.login_lock_secs;
+        config.security.mail_provider = self.mail_provider;
+        config.security.ses_region = self.ses_region.clone();
+        config.security.mail_hourly_limit = self.mail_hourly_limit;
         config.security.smtp_enabled = self.smtp_enabled;
         config.security.smtp_host = self.smtp_host.clone();
         config.security.smtp_port = self.smtp_port;
-        config.security.smtp_username = self.smtp_username.clone();
         config.security.smtp_from = self.smtp_from.clone();
         config.security.smtp_tls = self.smtp_tls;
         config.security.password_reset_enabled = self.password_reset_enabled;
@@ -361,6 +503,110 @@ impl AccountSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn turnstile_hostnames_are_normalized_deduplicated_and_reject_ambiguous_domains() {
+        assert_eq!(
+            parse_turnstile_hostnames(
+                " BOARDS.Example.test，localhost\nboards.example.test 127.0.0.1"
+            )
+            .unwrap(),
+            vec!["boards.example.test", "localhost", "127.0.0.1"]
+        );
+        for value in [
+            "https://example.test",
+            "*.example.test",
+            "example.test:443",
+            ".example.test",
+            "example..test",
+            "example.test.",
+            "-example.test",
+            "example-.test",
+            "bad_host.test",
+        ] {
+            assert!(parse_turnstile_hostnames(value).is_err(), "{value}");
+        }
+    }
+    #[test]
+    fn development_registration_codes_are_explicit_runtime_policy_with_loopback_requirement() {
+        let mut config = SecurityConfig {
+            registration_email_verification: true,
+            ..Default::default()
+        };
+        assert!(!config.dev_registration_codes);
+        assert!(config.validate(true).is_err());
+        config.dev_registration_codes = true;
+        config.validate(true).unwrap();
+        assert!(!config.smtp_available());
+        assert!(
+            serde_json::to_value(&config)
+                .unwrap()
+                .get("dev_registration_codes")
+                .is_some()
+        );
+        let server = crate::ServerConfig {
+            security: config,
+            listen_addr: "0.0.0.0:2999".parse().unwrap(),
+            ..Default::default()
+        };
+        assert!(
+            server
+                .validate()
+                .unwrap_err()
+                .to_string()
+                .contains("loopback")
+        );
+    }
+    #[test]
+    fn managed_mail_providers_require_credentials_and_pin_encrypted_endpoints() {
+        for (provider, host) in [
+            (MailProvider::Brevo, "smtp-relay.brevo.com"),
+            (MailProvider::Mailjet, "in-v3.mailjet.com"),
+            (MailProvider::Ses, "email-smtp.eu-west-1.amazonaws.com"),
+        ] {
+            let mut config = SecurityConfig {
+                mail_provider: provider,
+                ses_region: "eu-west-1".into(),
+                ..Default::default()
+            };
+            assert!(config.validate(true).is_err());
+            assert!(!config.smtp_available());
+            config.smtp_username = Some("provider-login".into());
+            config.smtp_password = Some("secret-smtp-key".into());
+            config.smtp_from = Some("ostool <noreply@example.test>".into());
+            config.registration_email_verification = true;
+            config.validate(true).unwrap();
+            assert!(config.smtp_available());
+            assert_eq!(
+                config.mail_endpoint(),
+                (host.into(), 587, SmtpTls::Starttls)
+            );
+            assert!(
+                !serde_json::to_string(&config)
+                    .unwrap()
+                    .contains("secret-smtp-key")
+            );
+            config.smtp_enabled = false;
+            assert!(!config.smtp_available());
+        }
+    }
+    #[test]
+    fn old_account_settings_default_to_custom_smtp_and_bounded_mail_budget() {
+        let settings = AccountSettings::from_config(&crate::ServerConfig::default());
+        let mut value = serde_json::to_value(&settings).unwrap();
+        for key in ["mail_provider", "ses_region", "mail_hourly_limit"] {
+            value.as_object_mut().unwrap().remove(key);
+        }
+        let decoded: AccountSettings = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, settings);
+        let mut config = SecurityConfig {
+            mail_hourly_limit: 0,
+            ..Default::default()
+        };
+        assert!(config.validate(true).is_err());
+        config.mail_hourly_limit = 100;
+        config.ses_region = "us-east-1.evil.test/".into();
+        assert!(config.validate(true).is_err());
+    }
     #[test]
     fn default_public_uses_image_without_email_or_mfa_dependencies() {
         let config = SecurityConfig::default();

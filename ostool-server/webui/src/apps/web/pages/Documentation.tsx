@@ -412,7 +412,7 @@ export function Documentation() {
         content: (
           <a
             className="docs-inline-link"
-            href="https://github.com/drivercraft/ostool/blob/main/docs/api.md"
+            href="https://github.com/drivercraft/ostool/blob/main/ostool-server/docs/api.md"
           >
             完整 REST、串口和设备协议 <ExternalLink size={15} />
           </a>

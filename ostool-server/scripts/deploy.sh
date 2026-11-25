@@ -46,7 +46,7 @@ deploy_usage() {
   ostool-server/scripts/deploy.sh systemd up --output-dir /tmp/ostool-preview
 
 说明：
-  首次使用请复制 .env.example 为 .env，填写连接地址和必要密钥。
+  首次使用请复制 .env.deploy 为 .env，填写域名、连接地址和必要密钥。
   public 接入现有标准 Caddy；仅更新本站点片段，验证后 reload，不接管其他网站。
   本地 Docker 调试、演示数据与内部 CA 证书导出使用 dev.sh。
 EOF
@@ -95,69 +95,22 @@ JS
     fi
 }
 
-# 对比 .env 中已显式设置的 TFTP/网络接口键与数据库 server_records.settings 的运行值。
-# 这些键只在首次启动作为初始值写入数据库，此后每次启动被数据库值覆盖；
-# 不一致仅提示，不阻断部署，修改需走管理后台系统设置或 server_records。
-check_settings_drift() {
-    command -v psql >/dev/null || { printf '提示：未安装 psql，跳过数据库运行设置对比。\n'; return 0; }
+# 启动配置不再覆盖数据库业务策略；这里只校验键名，不读取数据库或输出配置值。
+check_startup_settings() {
     node --input-type=commonjs - "$ENV_FILE" <<'JS'
-const { spawnSync } = require('node:child_process');
 const { readFileSync } = require('node:fs');
 const { parseEnv } = require('node:util');
-
-try {
-    const values = parseEnv(readFileSync(process.argv[2], 'utf8'));
-    const url = new URL(values.OSTOOL_DATABASE_URL);
-    if (!['postgres:', 'postgresql:'].includes(url.protocol)) throw Error();
-    const env = { ...process.env };
-    if (url.password) env.PGPASSWORD = decodeURIComponent(url.password);
-    url.password = '';
-    // Preserve the original spelling of unrelated libpq query parameters.
-    url.search = url.search.slice(1).split('&').filter(option => {
-        const separator = option.indexOf('=');
-        const key = decodeURIComponent(separator < 0 ? option : option.slice(0, separator));
-        if (key === 'sslpassword') throw Error();
-        if (key !== 'password') return true;
-        if (separator < 0) throw Error();
-        env.PGPASSWORD = decodeURIComponent(option.slice(separator + 1));
-        return false;
-    }).join('&');
-
-    const schema = values.OSTOOL_DATABASE_SCHEMA;
-    if (schema && !/^[a-zA-Z0-9_]{1,63}$/.test(schema)) throw Error();
-    const table = schema ? `"${schema}".server_records` : 'server_records';
-    const sql = `select payload from ${table} where name='settings'`;
-    const result = spawnSync('psql', ['-XwtA', '-d', url.href, '-c', sql], {
-        env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, killSignal: 'SIGKILL',
-    });
-    if (result.status !== 0) throw Error();
-    if (!result.stdout.trim()) {
-        console.log('提示：数据库尚无 settings 运行记录，首次启动将从本 .env 初始化，无需对比。');
-    } else {
-        const { network, tftp } = JSON.parse(result.stdout);
-        const keys = [
-            ['OSTOOL_NETWORK_INTERFACE', network?.interface],
-            ['OSTOOL_TFTP_ENABLED', tftp?.enabled],
-        ];
-        if (tftp?.provider === 'builtin') keys.push(['OSTOOL_TFTP_BIND_ADDR', tftp.bind_addr]);
-        let drift = false;
-        for (const [key, actual] of keys) {
-            const expected = values[key];
-            if (!expected || expected === String(actual ?? '')) continue;
-            console.log(`警告：${key}=${expected}，但数据库运行值为 ${JSON.stringify(actual ?? '')}。请在管理后台修改运行设置。`);
-            drift = true;
-        }
-        if (!drift) console.log('数据库运行设置与 .env 一致。');
-    }
-} catch {
-    console.log('提示：无法读取数据库运行设置，跳过对比。');
-}
+const values = parseEnv(readFileSync(process.argv[2], 'utf8'));
+const runtime = new Set(['OSTOOL_AUTH_ENABLED','OSTOOL_NETWORK_INTERFACE','OSTOOL_CAPTCHA_PROVIDER','OSTOOL_ALLOW_REGISTRATION','OSTOOL_DEV_REGISTRATION_CODES','OSTOOL_REQUIRE_ADMIN_MFA','OSTOOL_REGISTRATION_EMAIL_VERIFICATION','OSTOOL_LOGIN_MAX_FAILURES','OSTOOL_LOGIN_LOCK_SECS','OSTOOL_ACCESS_TOKEN_TTL_SECS','OSTOOL_REFRESH_TOKEN_TTL_SECS','OSTOOL_DEVICE_CODE_TTL_SECS','OSTOOL_ADMIN_ALLOWED_NETWORKS','OSTOOL_AUDIT_RETENTION_DAYS']);
+const moved = Object.keys(values).filter(key => runtime.has(key) || ['OSTOOL_SMTP_','OSTOOL_TURNSTILE_','OSTOOL_MAIL_','OSTOOL_SES_','OSTOOL_TFTP_'].some(prefix => key.startsWith(prefix)));
+if (moved.length) { console.error(`以下配置已移至管理后台系统设置，请从启动环境移除：${moved.join(', ')}`); process.exit(1); }
+console.log('业务运行配置由管理后台系统设置维护。');
 JS
 }
 
 deploy_prepare() {
     if [[ $MODE == systemd && ( $ACTION == status || $ACTION == logs || $ACTION == down || $ACTION == build ) ]]; then return; fi
-    [[ -f $ENV_FILE ]] || { printf '[错误] 配置不存在：%s\n请复制 ostool-server/.env.example 为 .env。\n' "$ENV_FILE" >&2; exit 1; }
+    [[ -f $ENV_FILE ]] || { printf '[错误] 配置不存在：%s\n请复制 ostool-server/.env.deploy 为 ostool-server/.env 并填写占位值。\n' "$ENV_FILE" >&2; exit 1; }
     ENV_FILE=$(cd -- "$(dirname -- "$ENV_FILE")" && pwd -P)/$(basename -- "$ENV_FILE")
     for name in ${!OSTOOL_@}; do unset "$name"; done
     export OSTOOL_ENV_FILE=$ENV_FILE
@@ -226,7 +179,7 @@ deploy_systemd() {
     fi
     if [[ $ACTION == check ]]; then
         [[ -n $(deploy_setting OSTOOL_DATABASE_URL) ]] || { echo '缺少 OSTOOL_DATABASE_URL' >&2; exit 1; }
-        check_settings_drift
+        check_startup_settings
         echo "配置检查通过：systemd / $EDITION（未安装服务）"; exit 0
     fi
     STAGING_DIR=$(mktemp -d)

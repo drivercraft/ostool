@@ -1,3 +1,4 @@
+import { parseHumanChallenge } from "@/human-verification";
 import {
   authSurface,
   clearBrowserSession,
@@ -44,6 +45,7 @@ export class ApiRequestError extends Error {
     public code: string,
     public status: number,
     public details?: Record<string, unknown>,
+    public retryAfterSeconds?: number,
   ) {
     super(message);
   }
@@ -193,10 +195,16 @@ async function requestResponse(
       : ((await readJsonBody<ErrorResponse>(response).catch(() => null)) ??
         error);
     throw new ApiRequestError(
-      failure?.message || `请求失败：${response.status}`,
+      failure?.code === "captcha_configuration_invalid"
+        ? "Cloudflare 人机验证配置无效，请联系管理员检查 Site Key 和 Secret Key。"
+        : failure?.message || `请求失败：${response.status}`,
       failure?.code || "request_failed",
       response.status,
       failure?.details as Record<string, unknown> | undefined,
+      response.headers.has("retry-after") &&
+        /^\d+$/.test(response.headers.get("retry-after")!)
+        ? Math.max(1, Number(response.headers.get("retry-after")))
+        : undefined,
     );
   }
 
@@ -448,8 +456,23 @@ export const api = {
       },
     });
   },
-  captcha(action: HumanAction) {
-    return request<HumanChallenge>(`/api/v1/auth/captcha?action=${action}`);
+  async captcha(action: Exclude<HumanAction, "configuration_test">) {
+    return parseHumanChallenge(
+      await request<unknown>(`/api/v1/auth/captcha?action=${action}`),
+      action,
+    );
+  },
+  async configurationCaptcha() {
+    return parseHumanChallenge(
+      await request<unknown>("/api/v1/admin/account-settings/captcha"),
+      "configuration_test",
+    );
+  },
+  verifyConfigurationCaptcha(verification: HumanProof) {
+    return request<{ verified: boolean }>(
+      "/api/v1/admin/account-settings/captcha/verify",
+      { method: "POST", bodyJson: verification },
+    );
   },
   verifyMfa(challenge_id: string, code: string) {
     return request<LoginResult>("/api/v1/auth/mfa/verify", {
@@ -506,6 +529,15 @@ export const api = {
       method: "POST",
       bodyJson: { email, action, verification },
     });
+  },
+  verifyRegistrationEmail(email: string, challenge_id: string, code: string) {
+    return request<{ verified: boolean }>(
+      "/api/v1/auth/registration-email/verify",
+      {
+        method: "POST",
+        bodyJson: { email, challenge_id, code },
+      },
+    );
   },
   resetPassword(challenge_id: string, code: string, new_password: string) {
     return request<void>("/api/v1/auth/password-reset", {
@@ -708,7 +740,8 @@ export type HumanAction =
   | "admin_login"
   | "register"
   | "registration_email"
-  | "password_reset";
+  | "password_reset"
+  | "configuration_test";
 export interface HumanProof {
   captcha_id?: string;
   captcha_code?: string;
@@ -719,6 +752,7 @@ export interface HumanChallenge {
   provider: "image" | "turnstile";
   image_data_url?: string;
   site_key?: string;
+  cdata?: string;
   expires_in: number;
 }
 export type LoginResult =

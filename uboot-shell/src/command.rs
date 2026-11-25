@@ -14,14 +14,13 @@ use futures::{
 };
 use futures_timer::Delay;
 
-use crate::{CTRL_C, INT, UbootShell, normalize_interrupt_prompt};
+use crate::{CTRL_C, INT, UbootShell};
 
 const ECHO_TIMEOUT: Duration = Duration::from_secs(5);
 const SEND_TIMEOUT: Duration = Duration::from_secs(30);
 const RECOVERY_TIMEOUT: Duration = Duration::from_secs(5);
 const IDLE_TIMEOUT: Duration = Duration::from_millis(300);
 const RECOVERY_READ_BATCH: usize = 256;
-const MAX_TIMESTAMP_BYTES: usize = 64;
 const MAX_ATTEMPTS: usize = 3;
 const OK: &str = "cmd-ok";
 const END: &str = "cmd-end";
@@ -71,31 +70,6 @@ fn stage_error(stage: &str, err: Error) -> Error {
     )
 }
 
-// Firmware may timestamp each separate console write. Strip one bounded
-// prefix when interpreting protocol markers or extracting an environment value.
-pub(super) fn strip_command_timestamp(line: &str) -> Option<&str> {
-    let (prefix, value) = line.split_once("] ")?;
-    if prefix.len() + 2 > MAX_TIMESTAMP_BYTES {
-        return None;
-    }
-    let (seconds, fraction) = prefix
-        .strip_prefix('[')?
-        .trim_start_matches([' ', '\t'])
-        .split_once('.')?;
-    if seconds.is_empty()
-        || fraction.is_empty()
-        || !seconds.bytes().all(|byte| byte.is_ascii_digit())
-        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
-    {
-        return None;
-    }
-    Some(value)
-}
-
-fn command_marker_matches(line: Option<&str>, marker: &str) -> bool {
-    line.is_some_and(|line| line == marker || strip_command_timestamp(line) == Some(marker))
-}
-
 impl UbootShell {
     pub(super) async fn admit_command(&mut self) -> Result<()> {
         match self.command_phase {
@@ -140,11 +114,7 @@ impl UbootShell {
         info!("cmd: {cmd}");
         // A separate completion line distinguishes a fully observed failure
         // from missing/corrupt success output. It does not make replay safe.
-        // A leading '[' is indistinguishable from a firmware timestamp while
-        // waiting for its byte echo. A shell-ignored space removes the ambiguity
-        // without depending on timestamps being present on every command.
-        let padding = if cmd.starts_with('[') { " " } else { "" };
-        let wire_command = format!("{padding}{cmd}&& echo {OK}; echo {END}");
+        let wire_command = format!("{cmd}&& echo {OK}; echo {END}");
         for attempt in 1..=MAX_ATTEMPTS {
             let started = Instant::now();
             self.command_phase = CommandPhase::Dirty;
@@ -228,19 +198,13 @@ impl UbootShell {
         deadline: Instant,
     ) -> std::result::Result<(), SendFailure> {
         // ECMA-48 CSI grammar: parameters, intermediates, then one final byte.
-        enum Prefix {
+        enum Csi {
             Ordinary,
             Escape,
             Parameters,
             Intermediates,
-            TimestampPadding,
-            TimestampSeconds,
-            TimestampFractionStart,
-            TimestampFraction,
-            TimestampSpace,
         }
-        let mut state = Prefix::Ordinary;
-        let mut timestamp_bytes = 0;
+        let mut state = Csi::Ordinary;
         loop {
             // A continuously ready stream must not starve the timer's poll.
             if Instant::now() >= deadline {
@@ -267,53 +231,17 @@ impl UbootShell {
                     offset, expected, actual,
                 )));
             }
-            if matches!(
-                state,
-                Prefix::TimestampPadding
-                    | Prefix::TimestampSeconds
-                    | Prefix::TimestampFractionStart
-                    | Prefix::TimestampFraction
-                    | Prefix::TimestampSpace
-            ) {
-                timestamp_bytes += 1;
-                if timestamp_bytes > MAX_TIMESTAMP_BYTES {
-                    return Err(SendFailure::Echo(Error::new(
-                        ErrorKind::InvalidData,
-                        "U-Boot timestamp prefix is too long",
-                    )));
-                }
-            }
             state = match state {
-                Prefix::Ordinary if actual == expected => return Ok(()),
-                Prefix::Ordinary if actual == 0x1b => Prefix::Escape,
-                Prefix::Escape if actual == b'[' => Prefix::Parameters,
-                Prefix::Parameters if (0x30..=0x3f).contains(&actual) => Prefix::Parameters,
-                Prefix::Parameters | Prefix::Intermediates if (0x20..=0x2f).contains(&actual) => {
-                    Prefix::Intermediates
+                Csi::Ordinary if actual == expected => return Ok(()),
+                Csi::Ordinary if actual == 0x1b => Csi::Escape,
+                Csi::Escape if actual == b'[' => Csi::Parameters,
+                Csi::Parameters if (0x30..=0x3f).contains(&actual) => Csi::Parameters,
+                Csi::Parameters | Csi::Intermediates if (0x20..=0x2f).contains(&actual) => {
+                    Csi::Intermediates
                 }
-                Prefix::Parameters | Prefix::Intermediates if (0x40..=0x7e).contains(&actual) => {
-                    Prefix::Ordinary
+                Csi::Parameters | Csi::Intermediates if (0x40..=0x7e).contains(&actual) => {
+                    Csi::Ordinary
                 }
-                // Permit one bounded firmware timestamp only before byte zero.
-                // Never search past arbitrary noise or a line ending for echo.
-                Prefix::Ordinary if offset == 0 && actual == b'[' && timestamp_bytes == 0 => {
-                    timestamp_bytes = 1;
-                    Prefix::TimestampPadding
-                }
-                Prefix::TimestampPadding if matches!(actual, b' ' | b'\t') => {
-                    Prefix::TimestampPadding
-                }
-                Prefix::TimestampPadding | Prefix::TimestampSeconds if actual.is_ascii_digit() => {
-                    Prefix::TimestampSeconds
-                }
-                Prefix::TimestampSeconds if actual == b'.' => Prefix::TimestampFractionStart,
-                Prefix::TimestampFractionStart | Prefix::TimestampFraction
-                    if actual.is_ascii_digit() =>
-                {
-                    Prefix::TimestampFraction
-                }
-                Prefix::TimestampFraction if actual == b']' => Prefix::TimestampSpace,
-                Prefix::TimestampSpace if actual == b' ' => Prefix::Ordinary,
                 _ => return Err(SendFailure::Echo(echo_mismatch(offset, expected, actual))),
             };
         }
@@ -328,14 +256,14 @@ impl UbootShell {
             .lines()
             .map(|line| line.trim_end_matches('\r'))
             .collect();
-        if !command_marker_matches(lines.pop(), END) {
+        if lines.pop() != Some(END) {
             return Err(Error::new(
                 ErrorKind::InvalidData,
                 "U-Boot command completion marker missing or corrupt; execution uncertain",
             ));
         }
         self.command_phase = CommandPhase::Ready;
-        if !command_marker_matches(lines.pop(), OK) {
+        if lines.pop() != Some(OK) {
             return Err(Error::other(
                 "U-Boot command failed; complete failure result received (not replayed)",
             ));
@@ -438,25 +366,12 @@ impl UbootShell {
                 if line.last() == Some(&b'\r') {
                     line.pop();
                 }
-                if !overlong {
-                    if line == INT || line == prefixed {
-                        break;
-                    }
-                    if let Some(prefix) = line
-                        .strip_suffix(INT)
-                        .and_then(|prefix| std::str::from_utf8(prefix).ok())
-                    {
-                        let normalized = normalize_interrupt_prompt(prefix);
-                        if matches!(normalized, std::borrow::Cow::Owned(_))
-                            && normalized == self.perfix
-                        {
-                            break;
-                        }
-                    }
+                if !overlong && (line == INT || line == prefixed) {
+                    break;
                 }
                 line.clear();
                 overlong = false;
-            } else if line.len() < prefixed.len() + MAX_TIMESTAMP_BYTES + 1 {
+            } else if line.len() <= prefixed.len() + 1 {
                 line.push(byte);
             } else {
                 overlong = true;

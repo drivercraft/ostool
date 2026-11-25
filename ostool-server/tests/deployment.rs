@@ -28,7 +28,7 @@ fn native_render_selects_proxy_by_edition_and_does_not_expose_backend_secrets() 
         let root = tempfile::tempdir().unwrap();
         let file = root.path().join(".env");
         let output = root.path().join("out");
-        fs::write(&file,format!("OSTOOL_EDITION={edition}\nOSTOOL_LISTEN_ADDR=127.0.0.1:2999\nOSTOOL_PUBLIC_BASE_URL=https://boards.example.com\nOSTOOL_SITE_ADDRESSES=boards.example.com\nOSTOOL_DATABASE_URL=postgres://user:sensitive-password@localhost/db\nOSTOOL_SMTP_PASSWORD='$(touch {})'\n",root.path().join("unexpected").display())).unwrap();
+        fs::write(&file,format!("OSTOOL_EDITION={edition}\nOSTOOL_LISTEN_ADDR=127.0.0.1:2999\nOSTOOL_PUBLIC_BASE_URL=https://boards.example.com\nOSTOOL_SITE_ADDRESSES=boards.example.com\nOSTOOL_DATABASE_URL=postgres://user:sensitive-password@localhost/db\nOSTOOL_ADMIN_PASSWORD='$(touch {})'\n",root.path().join("unexpected").display())).unwrap();
         let result = run(&file, &output, edition);
         assert!(
             result.status.success(),
@@ -49,7 +49,7 @@ fn native_render_selects_proxy_by_edition_and_does_not_expose_backend_secrets() 
         if edition == "public" {
             let proxy = fs::read_to_string(output.join("ostool-server.caddy")).unwrap();
             assert!(!proxy.contains("sensitive-password"));
-            assert!(!proxy.contains("SMTP"));
+            assert!(!proxy.contains("$(touch "));
             assert!(proxy.contains("reverse_proxy 127.0.0.1:2999"));
             assert!(proxy.contains("https://boards.example.com"));
             assert!(!proxy.contains("admin off"));
@@ -81,7 +81,7 @@ fn public_plan_rejects_exposed_native_api_before_any_installation() {
 fn executable_checks_one_env_without_creating_a_toml_or_starting_hardware() {
     let root = tempfile::tempdir().unwrap();
     let file = root.path().join(".env");
-    fs::write(&file,"OSTOOL_EDITION=local\nOSTOOL_LISTEN_ADDR=127.0.0.1:2999\nOSTOOL_NETWORK_INTERFACE=lo\nOSTOOL_PUBLIC_BASE_URL=https://boards.example.com\nOSTOOL_DATABASE_URL=postgres://unreachable.invalid/unused\n").unwrap();
+    fs::write(&file,"OSTOOL_EDITION=local\nOSTOOL_LISTEN_ADDR=127.0.0.1:2999\nOSTOOL_PUBLIC_BASE_URL=https://boards.example.com\nOSTOOL_DATABASE_URL=postgres://unreachable.invalid/unused\n").unwrap();
     let result = Command::new(env!("CARGO_BIN_EXE_ostool-server"))
         .current_dir(root.path())
         .args(["--env-file"])
@@ -95,7 +95,7 @@ fn executable_checks_one_env_without_creating_a_toml_or_starting_hardware() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
-    fs::write(&file, "OSTOOL_EDITION=local\nOSTOOL_NETWORK_INTERFACE=lo\n").unwrap();
+    fs::write(&file, "OSTOOL_EDITION=local\n").unwrap();
     let missing = Command::new(env!("CARGO_BIN_EXE_ostool-server"))
         .current_dir(root.path())
         .args(["--env-file"])
@@ -241,7 +241,7 @@ fn public_executable_rejects_plaintext_origins_and_exposed_backends_before_start
         ("0.0.0.0:2999", "https://boards.example.com", false),
         ("127.0.0.1:2999", "https://boards.example.com", true),
     ] {
-        fs::write(&file,format!("OSTOOL_EDITION=public\nOSTOOL_LISTEN_ADDR={address}\nOSTOOL_PUBLIC_BASE_URL={origin}\nOSTOOL_NETWORK_INTERFACE=lo\nOSTOOL_DATABASE_URL=postgres://unreachable.invalid/unused\n")).unwrap();
+        fs::write(&file,format!("OSTOOL_EDITION=public\nOSTOOL_LISTEN_ADDR={address}\nOSTOOL_PUBLIC_BASE_URL={origin}\nOSTOOL_DATABASE_URL=postgres://unreachable.invalid/unused\n")).unwrap();
         let result = Command::new(env!("CARGO_BIN_EXE_ostool-server"))
             .current_dir(root.path())
             .args(["--env-file"])
@@ -257,4 +257,49 @@ fn public_executable_rejects_plaintext_origins_and_exposed_backends_before_start
         );
     }
     assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1);
+}
+
+#[test]
+fn startup_check_rejects_business_environment_keys_without_showing_their_values() {
+    let root = tempfile::tempdir().unwrap();
+    let file = root.path().join("runtime.env");
+    fs::write(&file, "OSTOOL_EDITION=local\nOSTOOL_DATABASE_URL=postgres://localhost/example\nOSTOOL_SMTP_PASSWORD=must-not-print-this-secret\n").unwrap();
+    let output = Command::new(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/deploy.sh"))
+        .args(["systemd", "check", "--env-file"])
+        .arg(file)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let diagnostic = String::from_utf8_lossy(&output.stderr);
+    assert!(diagnostic.contains("OSTOOL_SMTP_PASSWORD"));
+    assert!(!diagnostic.contains("must-not-print-this-secret"));
+}
+
+#[test]
+fn deployment_and_debug_examples_validate_after_replacing_credentials() {
+    use base64::Engine;
+    for name in [".env.deploy", ".env.dev"] {
+        let root = tempfile::tempdir().unwrap();
+        let example = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(name)).unwrap();
+        let configured = example
+            .replace("REPLACE_WITH_DATABASE_PASSWORD", "fixture-db-password")
+            .replace(
+                "REPLACE_WITH_BASE64_32_BYTE_KEY",
+                &base64::engine::general_purpose::STANDARD.encode([7u8; 32]),
+            )
+            .replace("REPLACE_WITH_ADMIN_PASSWORD", "fixture-admin-password-123");
+        let file = root.path().join(".env");
+        fs::write(&file, configured).unwrap();
+        let result = Command::new(env!("CARGO_BIN_EXE_ostool-server"))
+            .arg("--env-file")
+            .arg(file)
+            .arg("--check-config")
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
 }

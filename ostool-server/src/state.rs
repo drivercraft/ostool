@@ -40,6 +40,8 @@ const ZHONGSHENG_RELEASE_SETTLE_DELAY: Duration = Duration::from_secs(10);
 
 #[derive(Serialize, Deserialize)]
 struct StoredSettings {
+    #[serde(default)]
+    audit_retention_days: Option<u32>,
     network: crate::TftpNetworkConfig,
     upload_limits: crate::UploadLimitsConfig,
     tftp: crate::TftpConfig,
@@ -47,6 +49,7 @@ struct StoredSettings {
 impl From<&ServerConfig> for StoredSettings {
     fn from(config: &ServerConfig) -> Self {
         Self {
+            audit_retention_days: config.audit.retention_days,
             network: config.network.clone(),
             upload_limits: config.upload_limits.clone(),
             tftp: config.tftp.clone(),
@@ -118,6 +121,7 @@ pub struct AppState {
     pub session_files: crate::persistence::files::SessionFileStore,
     pub(crate) uploads: crate::uploads::Uploads,
     pub security_cache: Option<crate::security::cache::SecurityCache>,
+    pub(crate) dev_registration_codes: Arc<crate::security::mail::DevRegistrationCodes>,
     pub security_revision: Arc<std::sync::atomic::AtomicU64>,
     pub audit: crate::audit::AuditHealth,
     pub monitor: crate::dashboard::Monitor,
@@ -182,6 +186,7 @@ pub async fn build_app_state(
             .await?;
         let tftp_changed =
             serde_json::to_value(&config.tftp)? != serde_json::to_value(&settings.tftp)?;
+        config.audit.retention_days = settings.audit_retention_days;
         config.network = settings.network;
         config.upload_limits = settings.upload_limits;
         config.tftp = settings.tftp;
@@ -234,6 +239,7 @@ pub async fn build_app_state(
         session_files,
         uploads: crate::uploads::Uploads::default(),
         security_cache,
+        dev_registration_codes: Arc::new(crate::security::mail::DevRegistrationCodes::default()),
         security_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         audit: crate::audit::AuditHealth::default(),
         monitor: crate::dashboard::Monitor::default(),
@@ -741,11 +747,42 @@ impl AppState {
         result.map_err(|_| anyhow::anyhow!("设备恢复命令执行失败"))
     }
 
+    pub async fn update_runtime_settings(
+        &self,
+        network: crate::TftpNetworkConfig,
+        upload_limits: crate::UploadLimitsConfig,
+        audit_retention_days: Option<u32>,
+        can_manage_audit: bool,
+    ) -> Result<(), crate::api::error::ApiError> {
+        let mut config = self.config.write().await;
+        let retention = audit_retention_days.unwrap_or(config.audit.retention_days.unwrap_or(0));
+        if config.edition.is_public()
+            && retention != config.audit.retention_days.unwrap_or(0)
+            && !can_manage_audit
+        {
+            return Err(crate::api::error::ApiError::forbidden(
+                "修改审计保留策略需要审计管理权限",
+            ));
+        }
+        let mut next = config.clone();
+        next.network = network;
+        next.upload_limits = upload_limits;
+        next.audit.retention_days = (retention > 0).then_some(retention);
+        next.validate()
+            .map_err(|error| crate::api::error::ApiError::bad_request(error.to_string()))?;
+        self.database
+            .save_record("settings", &StoredSettings::from(&next))
+            .await?;
+        *config = next;
+        drop(config);
+        self.admin_events.invalidate(&["server", "audit"]);
+        Ok(())
+    }
     pub async fn save_config(&self) -> anyhow::Result<()> {
-        let config = self.config.read().await.clone();
+        let config = self.config.read().await;
 
         self.database
-            .save_record("settings", &StoredSettings::from(&config))
+            .save_record("settings", &StoredSettings::from(&*config))
             .await
     }
 
