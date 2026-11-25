@@ -296,3 +296,23 @@
 .role-permission-option .field-help-trigger {
   margin-left: auto;
 }
+
+/* Inline actions reserve their own input space and remain usable if the input expires. */
+.input-action {
+  position: relative;
+}
+.input-action > [data-slot="input"] {
+  padding-inline-end: 140px;
+}
+.input-action > [data-slot="button"][data-size] {
+  position: absolute;
+  inset-inline-end: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 128px;
+  height: calc(var(--control-height) - 12px);
+  min-height: 0;
+  padding: 0 8px;
+  border-radius: calc(var(--control-radius) - 2px);
+  font-size: 12px;
+}

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { ArrowRight } from "lucide-react";
 import {
@@ -12,7 +12,9 @@ import { useEdition } from "@/edition";
 import { useSiteSettings } from "@/components/site-settings";
 import { AuthLegal } from "@/components/auth-legal";
 import { MessageToast } from "@/components/message-toast";
-import { TextField } from "@/components/forms";
+import { FieldTitle, TextField } from "@/components/forms";
+import { Field } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 import { HumanVerification } from "@/components/human-verification";
 import { useCountdown } from "@/components/security-hooks";
 import { Button } from "@/components/ui/button";
@@ -40,6 +42,7 @@ export function RegistrationForm() {
     site = useSiteSettings(),
     navigate = useNavigate(),
     location = useLocation();
+  const emailCodeId = useId();
   const emailRequired = config.registration_email_verification;
   const [step, setStep] = useState<RegistrationStep>(1);
   const [email, setEmail] = useState("");
@@ -338,23 +341,49 @@ export function RegistrationForm() {
           )}
           {step === 2 && (
             <>
-              <TextField
-                label="邮箱验证码"
-                required={emailRequired}
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                maxLength={6}
-                pattern={emailRequired ? "[0-9]{6}" : undefined}
-                value={code}
-                onValue={(value) => {
-                  setCode(value.replace(/\D/g, "").slice(0, 6));
-                  setChallenge((current) =>
-                    current ? { ...current, verifiedCode: "" } : current,
-                  );
-                  setError("");
-                }}
-                disabled={!progress.active}
-              />
+              <Field>
+                <FieldTitle label="邮箱验证码" htmlFor={emailCodeId} />
+                <div className="input-action">
+                  <Input
+                    id={emailCodeId}
+                    placeholder="请输入邮箱验证码"
+                    required={emailRequired}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    pattern={emailRequired ? "[0-9]{6}" : undefined}
+                    value={code}
+                    onChange={(event) => {
+                      setCode(
+                        event.target.value.replace(/\D/g, "").slice(0, 6),
+                      );
+                      setChallenge((current) =>
+                        current ? { ...current, verifiedCode: "" } : current,
+                      );
+                      setError("");
+                    }}
+                    disabled={!progress.active}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={remaining > 0}
+                    aria-label={
+                      remaining
+                        ? `${remaining} 秒后可重新发送邮箱验证码`
+                        : "重新发送邮箱验证码"
+                    }
+                    onClick={() => {
+                      setResendProof(undefined);
+                      setResendOpen(true);
+                      setError("");
+                    }}
+                  >
+                    {remaining ? `${remaining} 秒后重发` : "重新发送"}
+                  </Button>
+                </div>
+              </Field>
               <p>
                 {!emailRequired
                   ? "站点已取消邮箱验证，可以继续设置账号。"
@@ -362,18 +391,6 @@ export function RegistrationForm() {
                     ? `验证码将在 ${codeRemaining} 秒后失效。`
                     : "验证码已过期或失效，请重新发送。"}
               </p>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={remaining > 0}
-                onClick={() => {
-                  setResendProof(undefined);
-                  setResendOpen(true);
-                  setError("");
-                }}
-              >
-                {remaining ? `${remaining} 秒后可重新发送` : "重新发送邮件"}
-              </Button>
             </>
           )}
           {step === 3 && (
