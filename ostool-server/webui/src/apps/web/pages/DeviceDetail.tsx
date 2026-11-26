@@ -1,3 +1,4 @@
+import { BoardName } from "@/apps/web/components/board-name";
 import { useEffect } from "react";
 import { Link, useParams } from "react-router-dom";
 import { ArrowLeft, ArrowRight, Check, CircuitBoard } from "lucide-react";
@@ -41,7 +42,9 @@ export default function DeviceDetail() {
           <ArrowLeft />
           全部设备
         </Link>
-        <strong>{title}</strong>
+        <strong>
+          <BoardName id={board.id} name={title} />
+        </strong>
         <div>
           <a href="#device-introduction">产品介绍</a>
           <a href="#device-specifications">规格参数</a>
@@ -69,7 +72,9 @@ export default function DeviceDetail() {
         <span className="section-label">
           {board.board_type} / DEVELOPMENT BOARD
         </span>
-        <h1 id="device-detail-title">{title}</h1>
+        <h1 id="device-detail-title">
+          <BoardName id={board.id} name={title} />
+        </h1>
         <p>{document?.summary || "把下一次构建，带到真实的硬件上。"}</p>
         <div className="device-detail-tags">
           <span>{board.disabled ? "暂不可申请" : "已启用"}</span>

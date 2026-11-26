@@ -255,9 +255,9 @@ pub struct AllocationPolicy {
 impl Default for AllocationPolicy {
     fn default() -> Self {
         Self {
-            max_duration_minutes: 120,
-            max_concurrent_sessions: 1,
-            min_available_minutes: 10,
+            max_duration_minutes: 480,
+            max_concurrent_sessions: 2,
+            min_available_minutes: 30,
             board_types: vec![],
         }
     }
@@ -581,7 +581,7 @@ mod tests {
                 ..Default::default()
             },
             AllocationPolicy {
-                min_available_minutes: 121,
+                min_available_minutes: 481,
                 ..Default::default()
             },
             AllocationPolicy {

@@ -65,11 +65,11 @@ pub(crate) async fn decide(
             policy.min_available_minutes
         )));
     }
-    let peak: i64 = sqlx::query_scalar("WITH windows AS (SELECT greatest(starts_at,$2) AS start,least(ends_at,$3) AS finish FROM board_rentals WHERE user_id=$1 AND cancelled_at IS NULL AND starts_at<$3 AND ends_at>$2),events AS (SELECT start AS at,1 AS delta FROM windows UNION ALL SELECT finish,-1 FROM windows),levels AS (SELECT sum(sum(delta)) OVER (ORDER BY at) AS concurrent FROM events GROUP BY at) SELECT coalesce(max(concurrent),0)::bigint FROM levels")
-        .bind(user).bind(start).bind(end).fetch_one(&mut **tx).await?;
+    let peak: i64 = sqlx::query_scalar("WITH windows AS (SELECT greatest(starts_at,$2) AS start,least(ends_at,$3) AS finish FROM board_rentals r JOIN board_records b ON b.id=r.board_id WHERE r.user_id=$1 AND b.board_type=$4 AND cancelled_at IS NULL AND starts_at<$3 AND ends_at>$2),events AS (SELECT start AS at,1 AS delta FROM windows UNION ALL SELECT finish,-1 FROM windows),levels AS (SELECT sum(sum(delta)) OVER (ORDER BY at) AS concurrent FROM events GROUP BY at) SELECT coalesce(max(concurrent),0)::bigint FROM levels")
+        .bind(user).bind(start).bind(end).bind(&board.board_type).fetch_one(&mut **tx).await?;
     if peak >= i64::from(policy.max_concurrent_sessions) {
         return Ok(Decision::manual(format!(
-            "所选时段内已达到免审批并发上限（{} 台）",
+            "所选时段内同板型设备已达到免审批并发上限（{} 台）",
             policy.max_concurrent_sessions
         )));
     }

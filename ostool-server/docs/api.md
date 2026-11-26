@@ -1521,7 +1521,7 @@ MFA 主加密密钥、数据库及 Redis 连接不接受此接口修改；SMTP �
 `GET /api/v1/admin/permissions` 返回固定能力目录：`code/name/description/group/requires`。
 角色新增请求使用 `{name,description,permissions,allocation_policy}`，编辑还必须提交当前 `revision`（冲突返回 409），不再用单个布尔开关编辑全部权限。
 `allocation_policy` 为 `{max_duration_minutes,max_concurrent_sessions,min_available_minutes,board_types}`，
-默认 120 分钟、1 台、最少 10 分钟、板型不限；时长允许 1–1440，并发允许 1–16，最短时长不能超过最大时长。
+默认最长 480 分钟、每用户同板型并发 2 台、最少 30 分钟、板型不限；时长允许 1–1440，并发允许 1–16，最短时长不能超过最大时长。并发统计整个申请时段内同一板型的预约峰值，包含人工批准的预约，不同板型分别计算。
 能力代码、依赖及使用限制均由后端验证；未知代码拒绝，新增操作能力会自动包含其只读依赖。
 角色响应保留 `administrator` 作为 `system.admin` 的结果标记，并返回能力数组和使用规则。
 `GET /api/v1/auth/me` 与前台 profile 返回 `permissions/can_access_admin/allocation_policy`。
@@ -1538,10 +1538,14 @@ SSE 同样逐主题过滤，伪造 `topics/list_view/editor_view/board_editor_id
 
 `board.use` 允许使用当前有效租赁，`rental.request` 允许提交申请，`board.instant` 使符合策略的申请自动通过，并依赖前两项权限。
 所有前台用户统一调用 `POST /api/v1/account/rental-requests`，提交 `board_id,starts_at,ends_at,notes`。返回 201 及 `{id,status,rental_id,decision_note}`：`status` 为 `pending` 或 `auto_approved`，待审时 `rental_id=null`。
-自动审批需同时满足设备的 `allow_instant_use`、角色板型范围、最短/最长时长和整个申请窗口内的峰值并发限制。超出免审批范围的有效申请仍可进入人工审核。`decision_note` 说明未自动通过的具体原因（设备开关、板型范围、最短/最长时长或并发上限），并保存到申请记录供前后台查看。
+自动审批需同时满足设备的 `allow_instant_use`、角色板型范围、最短/最长时长和整个申请窗口内每用户同板型的峰值预约并发限制。超出免审批范围的有效申请仍可进入人工审核。`decision_note` 说明未自动通过的具体原因（设备开关、板型范围、最短/最长时长或并发上限），并保存到申请记录供前后台查看。
 已通过的租赁不得重叠，判定为 `[starts_at,ends_at)`；相邻时段允许交接，不能因该板已有其他租赁而拒绝无冲突的时段。最终写入在同一事务中检查用户/角色版本、开发板冲突及并发，失败不留下部分申请或分配。
 自动审批创建与人工审批相同的 `source='scheduled'` 预约，并保留用户选择的完整时段；CLI 会话结束和服务重启不缩短预约。
 `POST /api/v1/sessions` 只接受已通过且当前生效的租赁，不再隐式分配免审批设备。前台直接领取接口已移除。
+
+前台设备列表、详情、申请选项及租赁记录的名称按当前用户资格显示“（免审批）”。标识仅说明设备开关和角色范围允许；时长或并发仍由提交时检查。申请时长不在角色范围内时，前台提示并确认是否继续转人工审核。申请说明限制为 2000 个 UTF-16 代码单元，与浏览器 `maxLength` 一致。
+
+`DELETE /api/v1/account/rentals/{id}`：用户取消自己的未开始租赁或提前结束当前租赁，成功返回 204；他人的、已取消或已结束的租赁返回 404。操作释放预约及并发额度，并撤销该租赁下的设备会话，前台操作前提示确认。结束 CLI 会话本身仍保留预约；申请撤回接口仅处理待审核申请。
 
 管理员日历投影在 `rental_editor.bookings` 中返回租赁 ID、起止时间及租赁人标签。
 `GET /api/v1/account/availability` 与成员 SSE 的 `availability` 只返回 `{board_id,starts_at,ends_at,status}`，按查询范围裁剪并合并相邻占用段；不返回租赁 ID、标签、用户及备注。成员日历只能选空闲时段。

@@ -888,8 +888,14 @@ no tenant details or rental identifiers. Occupied time slots cannot be selected.
 
 Enable **Allow automatic approval** (允许自动审批, `allow_instant_use`) per device.
 Automatic approval also checks the role's board-type scope, minimum/maximum duration
-and peak concurrent reservations over the requested window. Nonqualifying requests
-remain pending for administrator review. Conflicting reservations return 409; exact
+and each user’s peak concurrent reservations of the same board type over the requested
+window. Defaults are 30–480 minutes and two boards per type; different board types
+have independent limits, and manually approved rentals count too. The migration
+updates the former default policy while preserving customized limits. As with other
+role-policy changes, affected accounts must sign in again; scheduled rentals remain
+valid. Eligible members see “（免审批）” beside device names in the catalog, details, application choices and
+rental history. Out-of-range durations require confirmation before submitting for
+manual review. Nonqualifying requests remain pending for administrator review. Conflicting reservations return 409; exact
 adjacent `[start, end)` windows are allowed, so one board can be rented to different
 people at different times, including after another person's current rental.
 
@@ -901,6 +907,11 @@ CLI session or restarting the server does not shorten the reservation. CLI reque
 only use approved rentals that are currently effective; they never allocate devices
 without an application. Public edition enforces identity and rental ownership;
 local edition continues to use direct exclusive hardware sessions.
+Members can cancel future rentals or end active rentals from **我的租赁** after
+confirmation. `DELETE /api/v1/account/rentals/{id}` returns 204 for the owner’s
+active/future rental, releases the reservation and capacity, and revokes its sessions.
+Other users’ rentals and already ended/cancelled rentals return 404. Application
+notes use the same 2000 UTF-16 code-unit limit as browser inputs.
 
 ## Existing board migration
 

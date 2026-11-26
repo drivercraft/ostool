@@ -1,3 +1,4 @@
+import { BoardName } from "@/apps/web/components/board-name";
 import { MessageToast } from "@/components/message-toast";
 import { useState, useSyncExternalStore } from "react";
 import { CircuitBoard, Search } from "lucide-react";
@@ -119,7 +120,9 @@ export function DeviceCatalog() {
                     {board.disabled ? "暂不可用" : "已启用"}
                   </span>
                 </div>
-                <h3>{documents[board.id]?.title || board.id}</h3>
+                <h3>
+                  <BoardName id={board.id} name={documents[board.id]?.title} />
+                </h3>
                 <p>{documents[board.id]?.summary || board.board_type}</p>
                 <div className="device-directory-tags">
                   {board.tags.map((tag) => (

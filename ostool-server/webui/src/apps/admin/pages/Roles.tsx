@@ -126,7 +126,8 @@ export default function Roles() {
               {role.permissions.includes("board.instant") && (
                 <small>
                   免审批使用：{role.allocation_policy.max_duration_minutes} 分钟
-                  / 最多 {role.allocation_policy.max_concurrent_sessions} 台
+                  / 同板型最多 {role.allocation_policy.max_concurrent_sessions}{" "}
+                  台
                 </small>
               )}
             </Cell>

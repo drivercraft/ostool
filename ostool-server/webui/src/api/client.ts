@@ -323,6 +323,11 @@ export const api = {
       },
     );
   },
+  releaseRental(id: string) {
+    return request<void>(`/api/v1/account/rentals/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+  },
   withdrawRentalRequest(id: string) {
     return request<void>(
       `/api/v1/account/rental-requests/${encodeURIComponent(id)}`,

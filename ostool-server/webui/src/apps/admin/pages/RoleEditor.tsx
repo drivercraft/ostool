@@ -72,9 +72,9 @@ function Editor({
       ["board.use", "rental.request"].filter(can),
     allocation_policy: (role ?? template)?.allocation_policy ??
       user?.allocation_policy ?? {
-        max_duration_minutes: 120,
-        max_concurrent_sessions: 1,
-        min_available_minutes: 10,
+        max_duration_minutes: 480,
+        max_concurrent_sessions: 2,
+        min_available_minutes: 30,
         board_types: [],
       },
   });
@@ -335,7 +335,7 @@ function Editor({
                     placeholder="1–1440 分钟"
                   />
                   <TextField
-                    label="每用户并发设备数"
+                    label="每用户同板型并发设备数"
                     type="number"
                     min={1}
                     max={16}
@@ -347,14 +347,14 @@ function Editor({
                     placeholder="1–16 台"
                   />
                   <TextField
-                    label="最短可用时长（分钟）"
+                    label="单次最短申请（分钟）"
                     type="number"
                     min={1}
                     max={draft.allocation_policy.max_duration_minutes}
                     required
                     value={draft.allocation_policy.min_available_minutes}
                     onValue={(v) => policy("min_available_minutes", Number(v))}
-                    hint="预约临近时，剩余时间不足此值则不分配"
+                    hint="申请短于此时长则转人工审核"
                   />
                   <TextareaField
                     label="可用板型范围"

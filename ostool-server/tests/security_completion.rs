@@ -971,3 +971,216 @@ async fn cancelled_begin_does_not_poison_pool_or_block_subsequent_login() -> Res
     child.kill().await?;
     Ok(())
 }
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn automatic_approval_defaults_are_per_board_type_and_members_can_release_rentals()
+-> Result<()> {
+    use chrono::{Duration, Utc};
+    let mut f = Fixture::new().await?;
+    for id in ["type-a-1", "type-a-2", "type-a-3", "type-b-1", "closed"] {
+        f.board(id, false, id != "closed").await?;
+    }
+    let mut other_type = f.state.boards.read().await["type-b-1"].clone();
+    other_type.board_type = "different".into();
+    f.state.board_store.write_board(&other_type).await?;
+    f.state
+        .boards
+        .write()
+        .await
+        .insert(other_type.id.clone(), other_type);
+    sqlx::query("UPDATE users SET role_id='advanced' WHERE id=$1")
+        .bind(f.member.user.id)
+        .execute(f.state.database.pool())
+        .await?;
+    let auth = f.state.config.read().await.auth.clone();
+    let user = f
+        .state
+        .database
+        .user_by_id(f.member.user.id)
+        .await?
+        .unwrap();
+    f.member = f
+        .state
+        .database
+        .issue_grant(user.clone(), "ostool-cli", "board:operate", &auth)
+        .await?;
+    let web = f
+        .state
+        .database
+        .issue_grant(user, "web", "profile", &auth)
+        .await?;
+    let other = f
+        .state
+        .database
+        .create_user(
+            "other",
+            "other@completion.test",
+            "completion-password-123",
+            None,
+            false,
+        )
+        .await?;
+    let other = f
+        .state
+        .database
+        .issue_grant(other, "web", "profile", &auth)
+        .await?;
+    let token = Some(web.access_token.as_str());
+    let (_, account) = f.call("GET", "/api/v1/account", token, Value::Null).await?;
+    assert_eq!(
+        account["profile"]["allocation_policy"],
+        json!({"max_duration_minutes":480,"min_available_minutes":30,"max_concurrent_sessions":2,"board_types":[]})
+    );
+    assert!(
+        account["catalog"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["auto_approval_available"] == (b["id"] != "closed"))
+    );
+    let start = Utc::now() + Duration::days(1);
+    let application = |board: &str, from, minutes| json!({"board_id":board,"starts_at":from,"ends_at":from+Duration::minutes(minutes),"notes":"中".repeat(2000)});
+    let mut rentals = Vec::new();
+    for (board, minutes, expected) in [
+        ("type-a-1", 30, "auto_approved"),
+        ("type-a-2", 480, "auto_approved"),
+        ("type-a-3", 60, "pending"),
+        ("type-b-1", 60, "auto_approved"),
+    ] {
+        let (status, response) = f
+            .call(
+                "POST",
+                "/api/v1/account/rental-requests",
+                token,
+                application(board, start, minutes),
+            )
+            .await?;
+        assert_eq!(status, StatusCode::CREATED, "{response}");
+        assert_eq!(response["status"], expected, "{response}");
+        if let Some(id) = response["rental_id"].as_str() {
+            rentals.push(id.to_owned());
+        }
+        if expected == "pending" {
+            assert!(
+                response["decision_note"]
+                    .as_str()
+                    .unwrap()
+                    .contains("同板型")
+            );
+        }
+    }
+    // Boundary violations stay available for manual review; no silent shortening.
+    for (days, minutes) in [(2, 29), (3, 481)] {
+        let (status, response) = f
+            .call(
+                "POST",
+                "/api/v1/account/rental-requests",
+                token,
+                application("type-a-1", start + Duration::days(days), minutes),
+            )
+            .await?;
+        assert_eq!(status, StatusCode::CREATED, "{response}");
+        assert_eq!(response["status"], "pending");
+    }
+    let mut too_long = application("type-a-1", start + Duration::days(4), 60);
+    too_long["notes"] = json!("中".repeat(2001));
+    assert_eq!(
+        f.call("POST", "/api/v1/account/rental-requests", token, too_long)
+            .await?
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+    let path = format!("/api/v1/account/rentals/{}", rentals[0]);
+    assert_eq!(
+        f.call("DELETE", &path, Some(&other.access_token), Value::Null)
+            .await?
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        f.call("DELETE", &path, token, Value::Null).await?.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        f.call("DELETE", &path, token, Value::Null).await?.0,
+        StatusCode::NOT_FOUND
+    );
+    // Releasing a reservation frees same-type capacity immediately.
+    let (_, response) = f
+        .call(
+            "POST",
+            "/api/v1/account/rental-requests",
+            token,
+            application("type-a-3", start, 30),
+        )
+        .await?;
+    assert_eq!(response["status"], "auto_approved", "{response}");
+
+    // Active hardware sessions lose authorization when their owner ends the rental.
+    let sid = f.session("type-a-1").await?;
+    let rental: uuid::Uuid =
+        sqlx::query_scalar("SELECT rental_id FROM session_owners WHERE session_id=$1")
+            .bind(&sid)
+            .fetch_one(f.state.database.pool())
+            .await?;
+    let runtime = f.state.session_state(&sid).await.unwrap();
+    assert!(!runtime.is_stop_requested());
+    let path = format!("/api/v1/account/rentals/{rental}");
+    assert_eq!(
+        f.call("DELETE", &path, token, Value::Null).await?.0,
+        StatusCode::NO_CONTENT
+    );
+    assert!(runtime.is_stop_requested());
+    assert!(
+        ostool_server::api::rentals::active(&f.state, web.user.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let (status, _) = f
+        .call(
+            "POST",
+            "/api/v1/sessions",
+            token,
+            json!({"board_id":"type-a-1","board_type":"completion"}),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn approval_policy_migration_updates_old_defaults_and_preserves_custom_limits() -> Result<()>
+{
+    let f = Fixture::new().await?;
+    let old = json!({"max_duration_minutes":120,"max_concurrent_sessions":1,"min_available_minutes":10,"board_types":["completion"]});
+    let custom = json!({"max_duration_minutes":60,"max_concurrent_sessions":3,"min_available_minutes":5,"board_types":["custom"]});
+    for (id, policy) in [("old-defaults", &old), ("custom-limits", &custom)] {
+        sqlx::query("INSERT INTO roles(id,code,name,allocation_policy) VALUES($1,$1,$1,$2)")
+            .bind(id)
+            .bind(policy)
+            .execute(f.state.database.pool())
+            .await?;
+    }
+    sqlx::raw_sql(include_str!(
+        "../migrations/20261126000000_auto_approval_policy.sql"
+    ))
+    .execute(f.state.database.pool())
+    .await?;
+    let policy: Value =
+        sqlx::query_scalar("SELECT allocation_policy FROM roles WHERE id='old-defaults'")
+            .fetch_one(f.state.database.pool())
+            .await?;
+    assert_eq!(
+        policy,
+        json!({"max_duration_minutes":480,"max_concurrent_sessions":2,"min_available_minutes":30,"board_types":["completion"]})
+    );
+    let policy: Value =
+        sqlx::query_scalar("SELECT allocation_policy FROM roles WHERE id='custom-limits'")
+            .fetch_one(f.state.database.pool())
+            .await?;
+    assert_eq!(policy, custom);
+    Ok(())
+}

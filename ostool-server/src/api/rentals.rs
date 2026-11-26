@@ -72,7 +72,7 @@ pub(crate) async fn save_internal(
             "开始时间必须早于结束时间，且结束时间必须在未来",
         ));
     }
-    if input.notes.len() > 2000 {
+    if input.notes.encode_utf16().count() > 2000 {
         return Err(ApiError::bad_request("备注不能超过 2000 字符"));
     }
     let _gate = state.rental_gate.lock().await;

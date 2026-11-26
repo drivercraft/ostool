@@ -66,6 +66,10 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/account", get(snapshot))
         .route("/api/v1/account/rentals", get(member_rentals))
+        .route(
+            "/api/v1/account/rentals/{id}",
+            axum::routing::delete(release_rental),
+        )
         .route("/api/v1/account/availability", get(member_availability))
         .route(
             "/api/v1/account/events",
@@ -128,6 +132,25 @@ async fn member_requests(
     super::listing::scoped_page(&state, &filters, Some(user.id))
         .await
         .map(Json)
+}
+
+async fn release_rental(
+    State(state): State<AppState>,
+    Extension(CurrentUser(user)): Extension<CurrentUser>,
+    Path(id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let _gate = state.rental_gate.lock().await;
+    let affected = sqlx::query("UPDATE board_rentals SET cancelled_at=now(),released_at=now() WHERE id=$1 AND user_id=$2 AND cancelled_at IS NULL AND ends_at>now()")
+        .bind(id).bind(user.id).execute(state.database.pool()).await.map_err(db_error)?;
+    if affected.rows_affected() == 0 {
+        return Err(ApiError::not_found("租赁不存在、已结束或已取消"));
+    }
+    state
+        .admin_events
+        .invalidate(&["rentals", "rental_requests"]);
+    state.rental_changed.notify_one();
+    rentals::enforce(&state).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn member_availability(
@@ -337,7 +360,10 @@ async fn submit(
     ),
     ApiError,
 > {
-    if input.starts_at >= input.ends_at || input.ends_at <= Utc::now() || input.notes.len() > 2000 {
+    if input.starts_at >= input.ends_at
+        || input.ends_at <= Utc::now()
+        || input.notes.encode_utf16().count() > 2000
+    {
         return Err(ApiError::bad_request(
             "请选择有效的起止时间，申请说明不能超过 2000 字符",
         ));

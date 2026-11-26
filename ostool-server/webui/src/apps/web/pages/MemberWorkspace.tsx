@@ -1,3 +1,4 @@
+import { BoardName } from "@/apps/web/components/board-name";
 import { MessageToast } from "@/components/message-toast";
 import { SecuritySettings } from "@/components/security-settings";
 import { useEffect, useState, type FormEvent } from "react";
@@ -238,13 +239,13 @@ function Overview({ user }: { user: AuthUser }) {
               <div>
                 <dt>单次最长</dt>
                 <dd>
-                  {user.allocation_policy?.max_duration_minutes ?? 120} 分钟
+                  {user.allocation_policy?.max_duration_minutes ?? 480} 分钟
                 </dd>
               </div>
               <div>
-                <dt>同时使用</dt>
+                <dt>同板型预约并发</dt>
                 <dd>
-                  {user.allocation_policy?.max_concurrent_sessions ?? 1} 台
+                  {user.allocation_policy?.max_concurrent_sessions ?? 2} 台
                 </dd>
               </div>
             </dl>
@@ -492,13 +493,15 @@ function RentalHistory() {
         <ListDataLoadingContext.Provider value={page.loading}>
           <DataTable
             rowOffset={page.rowOffset}
-            headers={["开发板", "使用时间", "状态", "备注"]}
+            headers={["开发板", "使用时间", "状态", "备注", "操作"]}
             empty={!page.rows.length}
           >
             {page.rows.map((r) => (
               <Row key={r.id}>
                 <Cell>
-                  <strong>{r.board_id}</strong>
+                  <strong>
+                    <BoardName id={r.board_id} />
+                  </strong>
                 </Cell>
                 <Cell>
                   {date(r.starts_at)}
@@ -519,6 +522,16 @@ function RentalHistory() {
                   </Badge>
                 </Cell>
                 <Cell>{r.notes || "—"}</Cell>
+                <Cell>
+                  {(r.status === "active" || r.status === "scheduled") && (
+                    <ConfirmAction
+                      label={r.status === "active" ? "提前结束" : "取消租赁"}
+                      description="将释放此预约时段及并发额度，并停止该租赁下的设备会话。"
+                      triggerVariant="ghost"
+                      action={() => api.releaseRental(r.id)}
+                    />
+                  )}
+                </Cell>
               </Row>
             ))}
           </DataTable>
@@ -559,7 +572,9 @@ function ApplicationHistory() {
             {page.rows.map((r) => (
               <Row key={r.id}>
                 <Cell>
-                  <strong>{r.board_id}</strong>
+                  <strong>
+                    <BoardName id={r.board_id} />
+                  </strong>
                   <small className="block">{r.notes || "—"}</small>
                 </Cell>
                 <Cell>

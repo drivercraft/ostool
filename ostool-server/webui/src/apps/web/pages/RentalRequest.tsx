@@ -1,3 +1,14 @@
+import { BoardName } from "@/apps/web/components/board-name";
+import { durationWarning } from "@/utils/auto-approval";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogBody,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { MessageToast } from "@/components/message-toast";
 import { useCallback, useEffect, useId, useState } from "react";
@@ -168,12 +179,72 @@ function RentalRequestForm({
   const policy = user.allocation_policy;
   const document =
     selectedDocument?.id === board ? selectedDocument.document : null;
+  const [confirmation, setConfirmation] = useState<string | null>(null);
+  const warning =
+    selectedBoard?.auto_approval_available && policy
+      ? durationWarning(Date.parse(start), Date.parse(end), policy)
+      : null;
+  async function submit(confirmedWarning?: string) {
+    if (warning && warning !== confirmedWarning) {
+      setConfirmation(warning);
+      return;
+    }
+    const ok = await task.run(async () => {
+      if (!boardExists) throw new Error("请选择可申请的设备");
+      if (!valid || Date.parse(end) <= Date.now())
+        throw new Error("请选择有效的起止时间，结束时间必须在未来");
+      if (conflicts.length) throw new Error("所选时段不可用，请选择空闲时段");
+      if (!ready) throw new Error("请等待日历同步完成");
+      const result = await api.applyRental({
+        board_id: board,
+        starts_at: new Date(start).toISOString(),
+        ends_at: new Date(end).toISOString(),
+        notes,
+      });
+      toast.success(
+        result.status === "auto_approved"
+          ? "申请已自动通过，可在所选时段使用开发板"
+          : result.decision_note,
+      );
+    }, false);
+    if (ok) navigate("/account/requests");
+  }
   useEffect(() => {
     site.setDeviceDocument(board || null);
     return () => site.setDeviceDocument(null);
   }, [board]);
   return (
     <div className="rental-request-layout">
+      <Dialog
+        open={!!confirmation}
+        onOpenChange={(open) => {
+          if (!open && !task.pending) setConfirmation(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>转人工审核</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <DialogDescription>{confirmation}</DialogDescription>
+          </DialogBody>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={task.pending}
+              onClick={() => setConfirmation(null)}
+            >
+              返回修改
+            </Button>
+            <Button
+              disabled={task.pending}
+              onClick={() => void submit(confirmation ?? undefined)}
+            >
+              继续提交
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <aside className="rental-device-summary" aria-label="所选设备信息">
         <div className="rental-device-image">
           {document?.image_url ? (
@@ -191,7 +262,9 @@ function RentalRequestForm({
         </div>
         <div className="rental-device-copy">
           <span className="section-label">YOUR NEXT HARDWARE</span>
-          <h2>{document?.title || board || "选择开发板"}</h2>
+          <h2>
+            <BoardName id={board} name={document?.title} />
+          </h2>
           <p>
             {document?.summary || "选择使用时段，给下一次开发留出专属空间。"}
           </p>
@@ -234,28 +307,7 @@ function RentalRequestForm({
               className="rental-editor-form"
               onSubmit={(event) => {
                 event.preventDefault();
-                void task
-                  .run(async () => {
-                    if (!boardExists) throw new Error("请选择可申请的设备");
-                    if (!valid) throw new Error("开始时间必须早于结束时间");
-                    if (conflicts.length)
-                      throw new Error("所选时段不可用，请选择空闲时段");
-                    if (!ready) throw new Error("请等待日历同步完成");
-                    const result = await api.applyRental({
-                      board_id: board,
-                      starts_at: new Date(start).toISOString(),
-                      ends_at: new Date(end).toISOString(),
-                      notes,
-                    });
-                    toast.success(
-                      result.status === "auto_approved"
-                        ? "申请已自动通过，可在所选时段使用开发板"
-                        : result.decision_note,
-                    );
-                  }, false)
-                  .then((ok) => {
-                    if (ok) navigate("/account/requests");
-                  });
+                void submit();
               }}
             >
               <TextField
@@ -274,7 +326,11 @@ function RentalRequestForm({
                 disabled={task.pending}
                 options={catalog.map((item) => ({
                   value: item.id,
-                  label: item.id + " · " + item.board_type,
+                  label:
+                    item.id +
+                    " · " +
+                    item.board_type +
+                    (item.auto_approval_available ? "（免审批）" : ""),
                 }))}
               />
               <TextField
@@ -343,12 +399,13 @@ function RentalRequestForm({
             message="所选时段不可用，请调整时间或在日历中选择空闲时段。"
           />
         )}
+        {warning && <Notice>{warning}</Notice>}
         {boardExists && automaticRole && (
           <Notice>
             {!selectedBoard.auto_approval_available
               ? "该设备未开放自动审批或不在当前角色的免审批范围，提交后需管理员审核。"
               : policy
-                ? `该设备支持自动审批。免审批时长为 ${policy.min_available_minutes}–${policy.max_duration_minutes} 分钟，并发最多 ${policy.max_concurrent_sessions} 台；提交时由服务器检查。`
+                ? `该设备支持自动审批。免审批时长为 ${policy.min_available_minutes}–${policy.max_duration_minutes} 分钟，每用户同板型预约并发最多 ${policy.max_concurrent_sessions} 台；提交时由服务器检查。`
                 : "该设备支持自动审批，提交时会检查申请时长和并发限制。"}
           </Notice>
         )}
