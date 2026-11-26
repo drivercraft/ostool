@@ -322,6 +322,7 @@ struct ApplicationResult {
     id: Uuid,
     status: &'static str,
     rental_id: Option<Uuid>,
+    decision_note: String,
 }
 async fn submit(
     State(state): State<AppState>,
@@ -392,7 +393,7 @@ async fn submit(
     if duplicate {
         return Err(ApiError::conflict("相同申请正在审核中，请勿重复提交"));
     }
-    let approved = super::auto_approval::approval_allowed(
+    let decision = super::auto_approval::decide(
         &mut tx,
         &access,
         &board,
@@ -401,6 +402,7 @@ async fn submit(
         input.ends_at,
     )
     .await?;
+    let approved = decision.approved;
     let rental = if approved {
         Some(sqlx::query_scalar::<_,Uuid>("INSERT INTO board_rentals(board_id,user_id,starts_at,ends_at,notes) VALUES($1,$2,$3,$4,$5) RETURNING id")
             .bind(&input.board_id).bind(user.id).bind(input.starts_at).bind(input.ends_at).bind(&input.notes).fetch_one(&mut *tx).await.map_err(db_error)?)
@@ -410,7 +412,7 @@ async fn submit(
     let status = if approved { "auto_approved" } else { "pending" };
     let id: Uuid = sqlx::query_scalar("INSERT INTO rental_requests(user_id,board_id,starts_at,ends_at,notes,status,decision_note,reviewed_at,rental_id) VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $8 THEN now() ELSE NULL END,$9) RETURNING id")
         .bind(user.id).bind(input.board_id).bind(input.starts_at).bind(input.ends_at).bind(input.notes)
-        .bind(status).bind(if approved { "符合免审批策略，系统自动通过" } else { "" }).bind(approved).bind(rental)
+        .bind(status).bind(&decision.note).bind(approved).bind(rental)
         .fetch_one(&mut *tx).await.map_err(db_error)?;
     tx.commit().await.map_err(db_error)?;
     state.admin_events.invalidate(if approved {
@@ -433,6 +435,7 @@ async fn submit(
             id,
             status,
             rental_id: rental,
+            decision_note: decision.note,
         }),
     ))
 }

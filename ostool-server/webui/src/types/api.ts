@@ -549,6 +549,7 @@ export interface RentalApplicationResult {
   id: string;
   status: "pending" | "auto_approved";
   rental_id: string | null;
+  decision_note: string;
 }
 export interface RentalApplication {
   board_id: string;

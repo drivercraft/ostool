@@ -683,7 +683,8 @@ it does not synchronize provider quotas, bounces or delivery receipts.
 
 Enable **Registration email verification** in the security settings to require an
 email code before account creation (disabled by default for existing deployments).
-The registration page shows separate code-expiry and resend countdowns. After cooldown,
+The registration page shows the resend cooldown inside the code input. Code expiry is
+enforced internally, with a message only when the code expires. After cooldown,
 resending stays on the code step and requires a fresh CAPTCHA.
 The registration page has three steps: enter email and complete CAPTCHA to send a
 code, validate the code with the server, then set up username/password and accept
@@ -734,8 +735,10 @@ failure budget with final registration, and limits each IP to 10 checks per 15 m
 Invalid/expired/consumed codes return HTTP 400 `registration_email_invalid`.
 `POST /api/v1/auth/password-reset` accepts `{challenge_id, code, new_password}`.
 All browser mutations retain Origin/CSRF checks. Requests are accepted before SMTP
-submission, with the same response for existing registrations, unknown/disabled
-recovery accounts and SMTP failures. Inspect mail history for submission results;
+submission. Registration requests for an already-used email return HTTP 409
+`registration_email_used` after CAPTCHA and IP checks, without issuing a code or
+sending mail. Unknown/disabled recovery accounts and SMTP failures retain the same
+accepted response. Inspect mail history for submission results;
 `sent` means SMTP accepted, not delivery to the inbox. Codes are never returned in public responses or stored in plaintext in PostgreSQL;
 the explicit local development preview above is the only display exception. Delivery is attempted once, with a 15-second overall timeout;
 restart-interrupted sends are not retried automatically. Request another code after
@@ -891,7 +894,8 @@ adjacent `[start, end)` windows are allowed, so one board can be rented to diffe
 people at different times, including after another person's current rental.
 
 Application submission returns `id`, `status` (`pending` or `auto_approved`) and
-`rental_id`. Automatic approval atomically creates an ordinary scheduled rental with
+`rental_id` plus `decision_note`. Pending requests explain which automatic-approval
+condition was not met, both in the response and application history. Automatic approval atomically creates an ordinary scheduled rental with
 the exact requested times. It has the same lifecycle as manual approval: ending a
 CLI session or restarting the server does not shorten the reservation. CLI requests
 only use approved rentals that are currently effective; they never allocate devices

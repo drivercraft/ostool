@@ -230,16 +230,24 @@ async fn issue(
     user: Option<crate::persistence::postgres::User>,
 ) -> Result<Json<Value>, ApiError> {
     let config = state.config.read().await.security.clone();
-    let development = purpose == "email:register" && config.dev_registration_codes;
+    let registration = purpose == "email:register";
+    if registration && !state.config.read().await.auth.allow_registration {
+        return Err(ApiError::forbidden("注册已关闭"));
+    }
+    if registration
+        && sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE email=$1)")
+            .bind(email)
+            .fetch_one(state.database.pool())
+            .await?
+    {
+        return Err(registration_email_used());
+    }
+    let development = registration && config.dev_registration_codes;
     if !development && !config.smtp_available() {
         return Err(ApiError::service_unavailable("邮箱验证尚未配置"));
     }
     if purpose == "email:reset" && !config.password_reset_enabled {
         return Err(ApiError::forbidden("密码找回已关闭"));
-    }
-    let registration = purpose == "email:register";
-    if registration && !state.config.read().await.auth.allow_registration {
-        return Err(ApiError::forbidden("注册已关闭"));
     }
     let policy = if registration {
         &config.registration_email_policy
@@ -307,8 +315,8 @@ async fn issue(
     let table = proof_table(purpose);
     let id = Uuid::new_v4();
     let resend_secs = policy.resend_secs.max(config.email_policy.resend_secs);
-    // Existing registrations and unknown/disabled recovery accounts receive the same response.
-    // Delivery runs after acceptance so SMTP latency/failures do not disclose account existence.
+    // Recovery remains uniform for unknown/disabled accounts. Registration reports used emails.
+    // Delivery runs after acceptance, keeping provider latency out of the response.
     let deliver = match purpose {
         "email:register" => {
             !sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM users WHERE email=$1)")
@@ -319,6 +327,9 @@ async fn issue(
         "email:reset" => user.is_some(),
         _ => true,
     };
+    if registration && !deliver {
+        return Err(registration_email_used());
+    }
     let mut tx = state.database.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(29992027)")
         .execute(&mut *tx)
@@ -414,7 +425,10 @@ async fn request(
     captcha::verify(&state, &client, action, &input.verification).await?;
     let email = crate::persistence::postgres::normalize_email(&input.email)
         .map_err(|_| ApiError::bad_request("邮箱格式无效"))?;
-    let user = state.database.find_user(&email).await?;
+    let user = match input.action {
+        Purpose::Register => None,
+        Purpose::PasswordReset => state.database.find_user(&email).await?,
+    };
     issue(
         &state,
         &client,
@@ -433,6 +447,13 @@ fn proof_table(purpose: &str) -> &'static str {
     } else {
         "email_verification_tokens"
     }
+}
+fn registration_email_used() -> ApiError {
+    ApiError::new(
+        axum::http::StatusCode::CONFLICT,
+        "registration_email_used",
+        "该邮箱已被使用，请直接登录或找回密码",
+    )
 }
 fn registration_error() -> ApiError {
     ApiError::new(

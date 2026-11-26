@@ -163,6 +163,9 @@ function RentalRequestForm({
     Date.parse(start) < Date.parse(end);
   const selectedBoard = catalog.find((item) => item.id === board);
   const boardExists = !!selectedBoard;
+  const automaticRole =
+    user.is_admin || user.permissions?.includes("board.instant");
+  const policy = user.allocation_policy;
   const document =
     selectedDocument?.id === board ? selectedDocument.document : null;
   useEffect(() => {
@@ -247,7 +250,7 @@ function RentalRequestForm({
                     toast.success(
                       result.status === "auto_approved"
                         ? "申请已自动通过，可在所选时段使用开发板"
-                        : "申请已提交，等待管理员审核",
+                        : result.decision_note,
                     );
                   }, false)
                   .then((ok) => {
@@ -339,6 +342,15 @@ function RentalRequestForm({
             kind="warning"
             message="所选时段不可用，请调整时间或在日历中选择空闲时段。"
           />
+        )}
+        {boardExists && automaticRole && (
+          <Notice>
+            {!selectedBoard.auto_approval_available
+              ? "该设备未开放自动审批或不在当前角色的免审批范围，提交后需管理员审核。"
+              : policy
+                ? `该设备支持自动审批。免审批时长为 ${policy.min_available_minutes}–${policy.max_duration_minutes} 分钟，并发最多 ${policy.max_concurrent_sessions} 台；提交时由服务器检查。`
+                : "该设备支持自动审批，提交时会检查申请时长和并发限制。"}
+          </Notice>
         )}
         {boardExists && (
           <RentalCalendar

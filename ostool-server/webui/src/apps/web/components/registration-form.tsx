@@ -59,7 +59,6 @@ export function RegistrationForm() {
     }
   });
   const remaining = useCountdown(until);
-  const codeRemaining = useCountdown(challenge?.expiresAt ?? 0);
   const [username, setUsername] = useState(""),
     [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState(""),
@@ -120,6 +119,17 @@ export function RegistrationForm() {
     setStep(target);
     setError("");
   }
+  function handleUsedEmail(failure: unknown) {
+    if (
+      !(failure instanceof ApiRequestError) ||
+      failure.code !== "registration_email_used"
+    )
+      return;
+    setChallenge(undefined);
+    setCode("");
+    setResendOpen(false);
+    setStep(1);
+  }
   async function sendEmail(verification: HumanProof) {
     const result = await api.emailCode(
       normalizeRegistrationEmail(email),
@@ -148,6 +158,7 @@ export function RegistrationForm() {
       await sendEmail(resendProof);
       setResendOpen(false);
     } catch (failure) {
+      handleUsedEmail(failure);
       setError(failure instanceof Error ? failure.message : "发送失败，请重试");
       if (failure instanceof ApiRequestError && failure.status === 429)
         cooldown(failure.retryAfterSeconds ?? 60);
@@ -245,6 +256,7 @@ export function RegistrationForm() {
         ),
       );
     } catch (failure) {
+      handleUsedEmail(failure);
       setError(failure instanceof Error ? failure.message : "注册失败，请重试");
       if (failure instanceof ApiRequestError) {
         if (failure.code === "registration_email_invalid") {
@@ -384,13 +396,11 @@ export function RegistrationForm() {
                   </Button>
                 </div>
               </Field>
-              <p>
-                {!emailRequired
-                  ? "站点已取消邮箱验证，可以继续设置账号。"
-                  : progress.active
-                    ? `验证码将在 ${codeRemaining} 秒后失效。`
-                    : "验证码已过期或失效，请重新发送。"}
-              </p>
+              {!emailRequired ? (
+                <p>站点已取消邮箱验证，可以继续设置账号。</p>
+              ) : (
+                !progress.active && <p>验证码已过期或失效，请重新发送。</p>
+              )}
             </>
           )}
           {step === 3 && (

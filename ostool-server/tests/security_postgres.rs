@@ -2871,6 +2871,30 @@ async fn rental_applications_auto_approve_only_within_board_and_role_limits() ->
         let pending = f.apply(token, board, from, to).await;
         assert_eq!(pending.status, StatusCode::CREATED, "{}", pending.body);
         assert_eq!(pending.body["status"], "pending");
+        assert!(
+            pending.body["decision_note"]
+                .as_str()
+                .unwrap()
+                .contains("等待管理员审核")
+        );
+        let stored: String =
+            sqlx::query_scalar("SELECT decision_note FROM rental_requests WHERE id=$1")
+                .bind(Uuid::parse_str(pending.body["id"].as_str().unwrap())?)
+                .fetch_one(f.f.state.database.pool())
+                .await?;
+        assert_eq!(pending.body["decision_note"], stored);
+        if board == "private-1" {
+            assert!(stored.contains("未开启允许自动审批"));
+        }
+        if board == "foreign-1" {
+            assert!(stored.contains("板型"));
+        }
+        if to - from > Duration::hours(2) {
+            assert!(stored.contains("上限（120 分钟）"));
+        }
+        if to - from < Duration::minutes(10) {
+            assert!(stored.contains("下限（10 分钟）"));
+        }
         assert!(pending.body["rental_id"].is_null());
     }
     // Pending applications do not reserve a window or prevent automatic approval.
@@ -2910,6 +2934,12 @@ async fn rental_applications_auto_approve_only_within_board_and_role_limits() ->
         .await;
     assert_eq!(capacity.status, StatusCode::CREATED);
     assert_eq!(capacity.body["status"], "pending");
+    assert!(
+        capacity.body["decision_note"]
+            .as_str()
+            .unwrap()
+            .contains("并发上限（1 台）")
+    );
     let later = f
         .apply(
             &f.advanced.access_token,
@@ -3888,7 +3918,8 @@ async fn mail_submission_hides_unknown_accounts_and_delivery_failure() {
     let known = request_test_mail(&f, "admin@security.test", false).await;
     let unknown = request_test_mail(&f, "unknown@security.test", false).await;
     let existing = request_test_mail(&f, "admin@security.test", true).await;
-    assert_eq!(existing.status, StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(existing.status, StatusCode::CONFLICT);
+    assert_eq!(existing.body["code"], "registration_email_used");
     assert_eq!(known.status, StatusCode::OK);
     assert_eq!(unknown.status, known.status);
     assert_eq!(unknown.body["message"], known.body["message"]);
@@ -5288,4 +5319,79 @@ async fn mail_connection_tests_authenticate_draft_username_with_saved_provider_p
     assert_eq!(failed.status, StatusCode::BAD_REQUEST);
     assert!(!failed.body.to_string().contains("password"));
     task.abort();
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn registration_reports_used_emails_without_issuing_challenges_or_mail() {
+    let f = Fixture::new(true).await;
+    let disabled = f
+        .state
+        .database
+        .create_user(
+            "disabled_registration",
+            "disabled-registration@security.test",
+            "registration-password-123",
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET disabled=true WHERE id=$1")
+        .bind(disabled.id)
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    let role_user = f
+        .state
+        .database
+        .create_user(
+            "disabled_role_registration",
+            "disabled-role-registration@security.test",
+            "registration-password-123",
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO roles(id,code,name,enabled,permissions) VALUES('disabled_registration_role','disabled_registration_role','Disabled',false,ARRAY['board.use'])").execute(f.state.database.pool()).await.unwrap();
+    sqlx::query("UPDATE users SET role_id='disabled_registration_role' WHERE id=$1")
+        .bind(role_user.id)
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    // This must work even before a sender is configured, and include disabled accounts.
+    for email in [
+        " ADMIN@SECURITY.TEST ",
+        "disabled-registration@security.test",
+        "disabled-role-registration@security.test",
+    ] {
+        let used = request_test_mail(&f, email, true).await;
+        assert_eq!(used.status, StatusCode::CONFLICT, "{}", used.body);
+        assert_eq!(used.body["code"], "registration_email_used");
+        assert!(
+            used.body["message"]
+                .as_str()
+                .unwrap()
+                .contains("邮箱已被使用")
+        );
+        assert!(used.body.get("challenge_id").is_none());
+    }
+    for table in ["email_verification_tokens", "mail_deliveries"] {
+        let count: i64 = sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+        assert_eq!(count, 0, "{table}");
+    }
+    // Knowledge of a registered address never bypasses the human-verification boundary.
+    let invalid = f
+        .request(
+            "POST",
+            "/api/v1/auth/email-code",
+            None,
+            json!({"email":"admin@security.test","action":"register","verification":{}}),
+        )
+        .await;
+    assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
 }

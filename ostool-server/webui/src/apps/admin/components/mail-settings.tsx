@@ -14,7 +14,6 @@ import { Field } from "@/components/ui/field";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import type {
   AccountSettings,
   AccountSettingsView,
@@ -224,11 +223,6 @@ export function MailSettings({
                     <Field key={key}>
                       <TextField
                         label={label}
-                        status={
-                          <Badge variant={configured ? "success" : "secondary"}>
-                            {configured ? "已配置" : "未配置"}
-                          </Badge>
-                        }
                         type="password"
                         autoComplete="new-password"
                         maxLength={key === "username" ? 320 : 4096}
