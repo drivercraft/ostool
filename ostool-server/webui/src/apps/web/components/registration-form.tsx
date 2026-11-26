@@ -282,7 +282,7 @@ export function RegistrationForm() {
     <>
       <form ref={form} className="auth-card" onSubmit={submit} aria-busy={busy}>
         <div>
-          <h2 ref={heading} tabIndex={-1}>
+          <h2 ref={heading} tabIndex={-1} className="outline-none">
             {titles[step]}
           </h2>
           <p>
