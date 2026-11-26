@@ -717,7 +717,7 @@ async fn smtp_sink_with_auth(
     });
     (port, receiver, task)
 }
-async fn mail_code(receiver: &mut tokio::sync::mpsc::Receiver<String>) -> String {
+async fn mail_body(receiver: &mut tokio::sync::mpsc::Receiver<String>) -> String {
     let message = tokio::time::timeout(std::time::Duration::from_secs(5), receiver.recv())
         .await
         .unwrap()
@@ -736,6 +736,19 @@ async fn mail_code(receiver: &mut tokio::sync::mpsc::Receiver<String>) -> String
     } else {
         body.replace("=\r\n", "")
     };
+    body.replace("=3D", "=")
+}
+async fn mail_code(receiver: &mut tokio::sync::mpsc::Receiver<String>) -> String {
+    let body = mail_body(receiver).await;
+    if let Some(link) = body
+        .split_whitespace()
+        .find(|part| part.starts_with("http") && part.contains("/password-reset#"))
+    {
+        let link = url::Url::parse(link).unwrap();
+        return url::form_urlencoded::parse(link.fragment().unwrap().as_bytes())
+            .find_map(|(key, value)| (key == "code").then(|| value.into_owned()))
+            .expect("reset mail contains a link credential");
+    }
     body.split(|c: char| !c.is_ascii_digit())
         .find(|part| part.len() == 6)
         .expect("mail contains a six digit code")
@@ -5394,4 +5407,174 @@ async fn registration_reports_used_emails_without_issuing_challenges_or_mail() {
         )
         .await;
     assert_eq!(invalid.status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+#[ignore = "requires disposable PostgreSQL and Redis"]
+async fn password_reset_links_are_private_single_use_expiring_and_not_consumed_by_page_visits() {
+    let f = Fixture::new(true).await;
+    let (port, mut messages, task) = smtp_sink().await;
+    configure_test_mail(&f, port).await;
+    let login = f.login(true).await;
+    let cookie = test_security::cookie_header(&login.headers);
+    let email = "admin@security.test";
+    let issued = request_test_mail(&f, email, false).await;
+    assert_eq!(issued.status, StatusCode::OK, "{}", issued.body);
+    let body = mail_body(&mut messages).await;
+    let link = body
+        .split_whitespace()
+        .find(|part| part.starts_with("http") && part.contains("/password-reset#"))
+        .expect("mail contains a reset link");
+    let link = url::Url::parse(link).unwrap();
+    let origin = url::Url::parse(
+        f.state
+            .config
+            .read()
+            .await
+            .auth
+            .public_base_url
+            .as_deref()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(link.origin(), origin.origin());
+    assert_eq!(link.path(), "/password-reset");
+    assert!(link.query().is_none());
+    let fields: std::collections::HashMap<_, _> =
+        url::form_urlencoded::parse(link.fragment().unwrap().as_bytes())
+            .into_owned()
+            .collect();
+    assert_eq!(
+        fields["challenge_id"],
+        issued.body["challenge_id"].as_str().unwrap()
+    );
+    let code = &fields["code"];
+    assert_eq!(code.len(), 43);
+    assert!(!issued.body.to_string().contains(code));
+    let id = fields["challenge_id"].parse::<Uuid>().unwrap();
+    let stored: String =
+        sqlx::query_scalar("SELECT code_hash FROM password_reset_tokens WHERE id=$1")
+            .bind(id)
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert_eq!(stored, crypto::proof_hash("email:reset", id, code));
+    assert_ne!(&stored, code);
+    assert_eq!(
+        f.request("GET", link.path(), None, Value::Null)
+            .await
+            .status,
+        StatusCode::OK
+    );
+    let consumed: bool =
+        sqlx::query_scalar("SELECT consumed_at IS NOT NULL FROM password_reset_tokens WHERE id=$1")
+            .bind(id)
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert!(
+        !consumed,
+        "mail scanners/page visits cannot consume reset links"
+    );
+    for (credential, password) in [
+        (code.clone(), "short"),
+        (crypto::random_token(), "replacement-password-456"),
+    ] {
+        let rejected = f
+            .request(
+                "POST",
+                "/api/v1/auth/password-reset",
+                None,
+                json!({"challenge_id":id,"code":credential,"new_password":password}),
+            )
+            .await;
+        assert_eq!(
+            rejected.status,
+            StatusCode::BAD_REQUEST,
+            "{}",
+            rejected.body
+        );
+    }
+    let reset = json!({"challenge_id":id,"code":code,"new_password":"replacement-password-456"});
+    sqlx::raw_sql("CREATE FUNCTION reject_reset_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.password_hash IS DISTINCT FROM OLD.password_hash THEN RAISE EXCEPTION 'test password write failure'; END IF; RETURN NEW; END $$; CREATE TRIGGER reject_reset_write BEFORE UPDATE ON users FOR EACH ROW EXECUTE FUNCTION reject_reset_write();")
+        .execute(f.state.database.pool()).await.unwrap();
+    assert_eq!(
+        f.request("POST", "/api/v1/auth/password-reset", None, reset.clone())
+            .await
+            .status,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let consumed: bool =
+        sqlx::query_scalar("SELECT consumed_at IS NOT NULL FROM password_reset_tokens WHERE id=$1")
+            .bind(id)
+            .fetch_one(f.state.database.pool())
+            .await
+            .unwrap();
+    assert!(
+        !consumed,
+        "a failed password write must not consume the link"
+    );
+    sqlx::query("DROP TRIGGER reject_reset_write ON users")
+        .execute(f.state.database.pool())
+        .await
+        .unwrap();
+    assert_eq!(
+        f.request("POST", "/api/v1/auth/password-reset", None, reset.clone())
+            .await
+            .status,
+        StatusCode::OK
+    );
+    assert_eq!(
+        f.request("POST", "/api/v1/auth/password-reset", None, reset)
+            .await
+            .status,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        f.request("GET", "/api/v1/auth/me", Some(&cookie), Value::Null)
+            .await
+            .status,
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(
+        f.state
+            .database
+            .authenticate_password(email, "replacement-password-456")
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    f.state
+        .security_cache
+        .as_ref()
+        .unwrap()
+        .clear("mail-recipient-cooldown", email)
+        .await
+        .unwrap();
+    let expired = request_test_mail(&f, email, false).await;
+    assert_eq!(expired.status, StatusCode::OK, "{}", expired.body);
+    let expired_code = mail_code(&mut messages).await;
+    let expired_id = expired.body["challenge_id"]
+        .as_str()
+        .unwrap()
+        .parse::<Uuid>()
+        .unwrap();
+    sqlx::query(
+        "UPDATE password_reset_tokens SET expires_at=now()-interval '1 second' WHERE id=$1",
+    )
+    .bind(expired_id)
+    .execute(f.state.database.pool())
+    .await
+    .unwrap();
+    assert_eq!(f.request("POST", "/api/v1/auth/password-reset", None, json!({"challenge_id":expired_id,"code":expired_code,"new_password":"expired-password-456"})).await.status, StatusCode::BAD_REQUEST);
+    assert!(
+        f.state
+            .database
+            .authenticate_password(email, "expired-password-456")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    task.abort();
 }

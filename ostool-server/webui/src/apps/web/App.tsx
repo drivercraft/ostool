@@ -166,26 +166,40 @@ function Login() {
   const navigate = useNavigate();
   const location = useLocation();
   const query = new URLSearchParams(location.search);
-  const userCode = query.get("user_code") ?? "";
+  const resetting = location.pathname === "/password-reset";
+  const userCode =
+    location.pathname === "/login" ? (query.get("user_code") ?? "") : "";
   const [approvedCode, setApprovedCode] = useState("");
   const deviceApproved = !!userCode && approvedCode === userCode;
   const [deviceConfirmed, setDeviceConfirmed] = useState(false);
   useEffect(() => setDeviceConfirmed(false), [userCode]);
   const registering = location.pathname === "/register";
-  const authConfig = useEdition();
   const legalSite = useSiteSettings();
+  const [accepted, setAccepted] = useState(false);
+  useEffect(
+    () => setAccepted(false),
+    [legalSite.terms_version, legalSite.privacy_version, registering, userCode],
+  );
   useEffect(() => {
     document.title =
-      (deviceApproved
-        ? "登录成功"
-        : userCode
-          ? "批准 CLI 登录"
-          : registering
-            ? "注册"
-            : "登录") +
+      (resetting
+        ? "找回密码"
+        : deviceApproved
+          ? "登录成功"
+          : userCode
+            ? "批准 CLI 登录"
+            : registering
+              ? "注册"
+              : "登录") +
       " · " +
       legalSite.settings.name;
-  }, [deviceApproved, registering, userCode, legalSite.settings.name]);
+  }, [
+    resetting,
+    deviceApproved,
+    registering,
+    userCode,
+    legalSite.settings.name,
+  ]);
   const [proof, setProof] = useState<HumanProof>();
   const [refreshKey, setRefreshKey] = useState(0);
   const [challenge, setChallenge] = useState<string>();
@@ -195,6 +209,10 @@ function Login() {
   const [busy, setBusy] = useState(false);
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!accepted) {
+      toast.error("请阅读并同意用户协议和隐私政策");
+      return;
+    }
     if (userCode && !deviceConfirmed) {
       toast.error("请确认由您发起登录，并核对终端验证码。");
       return;
@@ -273,11 +291,19 @@ function Login() {
         <section
           className="auth-form-pane"
           aria-label={
-            deviceApproved ? "登录成功" : registering ? "注册账号" : "用户登录"
+            resetting
+              ? "找回密码"
+              : deviceApproved
+                ? "登录成功"
+                : registering
+                  ? "注册账号"
+                  : "用户登录"
           }
         >
           <div className="auth-form-scroll">
-            {deviceApproved ? (
+            {resetting ? (
+              <PasswordReset />
+            ) : deviceApproved ? (
               <div
                 className="auth-card auth-success-card"
                 role="status"
@@ -362,7 +388,11 @@ function Login() {
                   />
                 )}
 
-                {!challenge && <AuthLegal />}
+                <AuthLegal
+                  accepted={accepted}
+                  onChange={setAccepted}
+                  disabled={busy}
+                />
                 {userCode && (
                   <label className="auth-device-confirmation">
                     <Checkbox
@@ -380,6 +410,7 @@ function Login() {
                   type="submit"
                   disabled={
                     busy ||
+                    !accepted ||
                     (!!userCode && !deviceConfirmed) ||
                     (!challenge && !proof?.captcha_code)
                   }
@@ -406,14 +437,16 @@ function Login() {
                     重新登录
                   </Button>
                 )}
-                {authConfig.password_reset_available && (
-                  <Link to="/password-reset">忘记密码</Link>
-                )}
-                {!userCode && (
-                  <Link className="auth-switch" to="/register">
-                    还没有账号？免费注册
+                <div className="flex items-center justify-between gap-2">
+                  <Link className="auth-switch" to="/password-reset">
+                    忘记密码？
                   </Link>
-                )}
+                  {!userCode && (
+                    <Link className="auth-switch" to="/register">
+                      还没有账号？免费注册
+                    </Link>
+                  )}
+                </div>
               </form>
             )}
           </div>
@@ -526,13 +559,7 @@ function PublicRoutes() {
           element={
             publicEdition ? (
               <PublicLayout>
-                <main className="auth-shell">
-                  <div className="auth-aside">
-                    <h1>安全恢复账号</h1>
-                    <p>验证邮箱后设置新密码。</p>
-                  </div>
-                  <PasswordReset />
-                </main>
+                <Login />
               </PublicLayout>
             ) : (
               <Navigate replace to="/" />

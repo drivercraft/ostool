@@ -721,11 +721,18 @@ the previous code. The resend countdown survives page reloads in the same tab.
 Sites without required email verification use email/account steps and require a
 registration CAPTCHA on final submission.
 
-Password recovery is available at `/password-reset` when mail and password recovery are enabled;
-it preserves enabled MFA and revokes old sessions/PATs after a successful reset.
-Recovery keeps the email-code flow, shows code expiry, permits returning to edit
-the email, and blocks duplicate submissions. Resend countdowns survive reloads in
-the same tab; HTTP `Retry-After` updates the send/confirmation cooldowns.
+Login pages always show **忘记密码？** linking to `/password-reset`. Sending requires
+configured mail and enabled password recovery; otherwise the page explains that
+mail recovery is unavailable. Recovery emails contain a one-time link to set a new
+password, preserving enabled MFA and revoking old sessions/PATs after success.
+The link uses the configured site origin and places its 256-bit random credential
+in `#challenge_id=...&code=...`, outside HTTP request URLs and referrers. The page
+removes the fragment and retains it only in memory. GET/page previews never consume
+the credential. Only its hash is stored; public responses and delivery history do
+not reveal the credential. Expired or used links require a new email; six-digit
+recovery codes sent before this upgrade must be replaced by requesting a new link.
+Duplicate submissions are blocked. Resend countdowns survive reloads in the same
+tab; HTTP `Retry-After` updates send/confirmation cooldowns.
 
 For local registration testing, enable **Local debug registration codes** and
 **Registration email verification** under **System settings → Login and security**.
@@ -755,7 +762,8 @@ and returns `{verified:true}` without creating an account or consuming the code.
 It requires open registration with email verification enabled, shares each code's
 failure budget with final registration, and limits each IP to 10 checks per 15 minutes.
 Invalid/expired/consumed codes return HTTP 400 `registration_email_invalid`.
-`POST /api/v1/auth/password-reset` accepts `{challenge_id, code, new_password}`.
+`POST /api/v1/auth/password-reset` accepts `{challenge_id, code, new_password}`;
+`code` is the 43-character credential from the email link.
 All browser mutations retain Origin/CSRF checks. Requests are accepted before SMTP
 submission. Registration requests for an already-used email return HTTP 409
 `registration_email_used` after CAPTCHA and IP checks, without issuing a code or

@@ -147,6 +147,7 @@ export function RegistrationForm() {
     if (
       inFlight.current ||
       !config.allow_registration ||
+      !accepted ||
       Date.now() < until ||
       !resendProof?.captcha_code
     )
@@ -172,6 +173,10 @@ export function RegistrationForm() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (inFlight.current || !config.allow_registration) return;
+    if (!accepted) {
+      setError("请阅读并同意用户协议和隐私政策");
+      return;
+    }
     inFlight.current = true;
     setBusy(true);
     setError("");
@@ -231,7 +236,6 @@ export function RegistrationForm() {
         new TextEncoder().encode(password).length > 1024
       )
         throw new Error("密码需要至少 8 个字符，且不超过 1024 字节");
-      if (!accepted) throw new Error("请阅读并同意用户协议和隐私政策");
       await api.register(
         username,
         normalizeRegistrationEmail(email),
@@ -458,13 +462,11 @@ export function RegistrationForm() {
               disabled={busy}
             />
           )}
-          {step === 3 && (
-            <AuthLegal
-              registration
-              accepted={accepted}
-              onChange={setAccepted}
-            />
-          )}
+          <AuthLegal
+            accepted={accepted}
+            onChange={setAccepted}
+            disabled={busy}
+          />
         </fieldset>
         {error && <MessageToast message={error} />}
         <Button
@@ -473,12 +475,13 @@ export function RegistrationForm() {
           disabled={
             busy ||
             !config.allow_registration ||
+            !accepted ||
             (needsProof && !hasProof) ||
             (step === 1 && needsProof && remaining > 0) ||
             (step === 2 &&
               emailRequired &&
               (!progress.active || !/^\d{6}$/.test(code))) ||
-            (step === 3 && (!accepted || (emailRequired && !progress.verified)))
+            (step === 3 && emailRequired && !progress.verified)
           }
         >
           {busy
@@ -536,7 +539,12 @@ export function RegistrationForm() {
               />
               <Button
                 type="submit"
-                disabled={busy || remaining > 0 || !resendProof?.captcha_code}
+                disabled={
+                  busy ||
+                  !accepted ||
+                  remaining > 0 ||
+                  !resendProof?.captcha_code
+                }
               >
                 {busy
                   ? "发送中…"

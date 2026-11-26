@@ -200,16 +200,37 @@ async fn send(
     email: &str,
     code: &str,
     ttl_secs: u32,
+    reset_link: Option<&str>,
 ) -> Result<(), ApiError> {
     let from = config
         .smtp_from
         .as_deref()
         .ok_or_else(|| ApiError::service_unavailable("邮箱验证尚未配置"))?;
+    let (subject, body) = if let Some(link) = reset_link {
+        (
+            "ostool 密码重置",
+            format!(
+                "请点击以下链接设置新的 ostool 登录密码：\n\n{link}\n\n链接 {ttl_secs} 秒内有效，只能使用一次。请勿向任何人提供此链接。\n如果这不是你的操作，请忽略本邮件。"
+            ),
+        )
+    } else {
+        (
+            "ostool 账号安全验证码",
+            format!(
+                "你的 ostool 验证码是：{code}\n验证码 {ttl_secs} 秒内有效，只能使用一次。请勿向任何人提供验证码。\n如果这不是你的操作，请忽略本邮件。"
+            ),
+        )
+    };
     let message = Message::builder()
-        .from(from.parse().map_err(|_| ApiError::service_unavailable("邮件发送配置无效"))?)
-        .to(email.parse().map_err(|_| ApiError::bad_request("邮箱格式无效"))?)
-        .subject("ostool 账号安全验证码")
-        .body(format!("你的 ostool 验证码是：{code}\n验证码 {ttl_secs} 秒内有效，只能使用一次。请勿向任何人提供验证码。\n如果这不是你的操作，请忽略本邮件。"))
+        .from(
+            from.parse()
+                .map_err(|_| ApiError::service_unavailable("邮件发送配置无效"))?,
+        )
+        .to(email
+            .parse()
+            .map_err(|_| ApiError::bad_request("邮箱格式无效"))?)
+        .subject(subject)
+        .body(body)
         .map_err(anyhow::Error::from)?;
     let transport = transport(config)?;
     tokio::time::timeout(std::time::Duration::from_secs(15), transport.send(message))
@@ -310,10 +331,35 @@ async fn issue(
         3600,
     )
     .await?;
-    let code = format!("{:06}", rand::random_range(0..1_000_000));
+    let code = if purpose == "email:reset" {
+        crypto::random_token()
+    } else {
+        format!("{:06}", rand::random_range(0..1_000_000))
+    };
     let subject = crypto::hash(email);
     let table = proof_table(purpose);
     let id = Uuid::new_v4();
+    let reset_link = if purpose == "email:reset" {
+        let config = state.config.read().await;
+        let origin = config
+            .auth
+            .public_base_url
+            .as_deref()
+            .ok_or_else(|| ApiError::service_unavailable("站点地址尚未配置"))?;
+        let mut link = url::Url::parse(origin)
+            .and_then(|url| url.join("/password-reset"))
+            .map_err(anyhow::Error::from)?;
+        // Fragments never enter HTTP request URLs or Referer headers.
+        link.set_fragment(Some(
+            &url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("challenge_id", &id.to_string())
+                .append_pair("code", &code)
+                .finish(),
+        ));
+        Some(link.to_string())
+    } else {
+        None
+    };
     let resend_secs = policy.resend_secs.max(config.email_policy.resend_secs);
     // Recovery remains uniform for unknown/disabled accounts. Registration reports used emails.
     // Delivery runs after acceptance, keeping provider latency out of the response.
@@ -382,7 +428,7 @@ async fn issue(
         let state = state.clone();
         let email = email.to_owned();
         tokio::spawn(async move {
-            let result = send(&config, &email, &code, ttl_secs).await;
+            let result = send(&config, &email, &code, ttl_secs, reset_link.as_deref()).await;
             let update = async {
                 let mut tx = state.database.begin().await?;
                 sqlx::query("UPDATE mail_deliveries SET status=$2,error_code=$3,completed_at=now() WHERE id=$1")
@@ -402,7 +448,7 @@ async fn issue(
     }
     state.admin_events.invalidate(&["mail_deliveries"]);
     Ok(Json(
-        json!({"challenge_id":id,"expires_in":ttl_secs,"resend_after":resend_secs,"message":"如该邮箱可以接收验证码，邮件将很快送达"}),
+        json!({"challenge_id":id,"expires_in":ttl_secs,"resend_after":resend_secs,"message":if purpose == "email:reset" { "如该邮箱对应可用账号，密码重置邮件将很快送达" } else { "如该邮箱可以接收验证码，邮件将很快送达" }}),
     ))
 }
 async fn request(
@@ -539,8 +585,15 @@ async fn check(
         .fetch_optional(&mut *tx)
         .await?;
     let Some(row) = row else { return Ok(None) };
-    let valid = code.len() == 6
-        && code.bytes().all(|c| c.is_ascii_digit())
+    let valid_format = if purpose == "email:reset" {
+        code.len() == 43
+            && code
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+    } else {
+        code.len() == 6 && code.bytes().all(|c| c.is_ascii_digit())
+    };
+    let valid = valid_format
         && row.try_get::<String, _>("purpose")? == purpose
         && row.try_get::<DateTime<Utc>, _>("expires_at")? > Utc::now()
         && row
@@ -618,34 +671,58 @@ async fn reset(
     store::limit(&state.security_cache, "reset-confirm", &client.ip, 10, 900).await?;
     crypto::validate_password(&input.new_password)
         .map_err(|e| ApiError::bad_request(e.to_string()))?;
-    let proof = consume(
+    let proof = check(
         &state,
         input.challenge_id,
         "email:reset",
         None,
         input.code.trim(),
+        false,
     )
     .await?
-    .ok_or_else(|| ApiError::bad_request("验证码错误、已使用或已过期"))?;
+    .ok_or_else(|| ApiError::bad_request("重置链接无效、已使用或已过期，请重新申请"))?;
     let user = proof
         .user_id
-        .ok_or_else(|| ApiError::bad_request("验证码错误、已使用或已过期"))?;
+        .ok_or_else(|| ApiError::bad_request("重置链接无效、已使用或已过期，请重新申请"))?;
     let version = proof
         .security_version
-        .ok_or_else(|| ApiError::bad_request("验证码已失效"))?;
+        .ok_or_else(|| ApiError::bad_request("重置链接已失效，请重新申请"))?;
     let hash = crate::persistence::postgres::hash_password_async(input.new_password).await?;
+    let max_attempts = state.config.read().await.security.email_policy.max_attempts as i32;
+    let mut tx = state.database.begin().await?;
+    // Match account mutations' user-before-proof lock order. A failed password write
+    // must leave the link retryable, and concurrent requests must consume it once.
+    let valid: Option<bool> = sqlx::query_scalar(
+        "SELECT NOT disabled AND security_version=$2 FROM users WHERE id=$1 FOR UPDATE",
+    )
+    .bind(user)
+    .bind(version)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if valid != Some(true) {
+        return Err(ApiError::bad_request("重置链接已失效，请重新申请"));
+    }
+    let consumed = sqlx::query("UPDATE password_reset_tokens SET consumed_at=now() WHERE id=$1 AND user_id=$2 AND purpose='email:reset' AND code_hash=$3 AND security_version=$4 AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at>clock_timestamp() AND attempts<$5")
+        .bind(input.challenge_id).bind(user).bind(crypto::proof_hash("email:reset", input.challenge_id, input.code.trim()))
+        .bind(version).bind(max_attempts).execute(&mut *tx).await?.rows_affected();
+    if consumed != 1 {
+        return Err(ApiError::bad_request(
+            "重置链接无效、已使用或已过期，请重新申请",
+        ));
+    }
     let count = sqlx::query(
         "UPDATE users SET password_hash=$2 WHERE id=$1 AND NOT disabled AND security_version=$3",
     )
     .bind(user)
     .bind(hash)
     .bind(version)
-    .execute(state.database.pool())
+    .execute(&mut *tx)
     .await?
     .rows_affected();
     if count != 1 {
-        return Err(ApiError::bad_request("验证码已失效，请重新申请"));
+        return Err(ApiError::bad_request("重置链接已失效，请重新申请"));
     }
+    tx.commit().await?;
     Ok(Json(json!({"reset":true})))
 }
 async fn send_verification(

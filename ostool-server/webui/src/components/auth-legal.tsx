@@ -2,13 +2,13 @@ import { useId } from "react";
 import { Checkbox } from "./ui/checkbox";
 import { useSiteSettings } from "./site-settings";
 export function AuthLegal({
-  registration = false,
-  accepted = false,
+  accepted,
   onChange,
+  disabled = false,
 }: {
-  registration?: boolean;
-  accepted?: boolean;
-  onChange?: (value: boolean) => void;
+  accepted: boolean;
+  onChange: (value: boolean) => void;
+  disabled?: boolean;
 }) {
   const id = useId(),
     site = useSiteSettings();
@@ -23,19 +23,19 @@ export function AuthLegal({
       </a>
     </>
   );
-  return registration ? (
+  return (
     <div className="auth-legal">
       <Checkbox
         id={id}
         aria-label="我已阅读并同意用户协议和隐私政策"
+        required
+        disabled={disabled}
         checked={accepted}
-        onCheckedChange={(value) => onChange?.(value === true)}
+        onCheckedChange={(value) => onChange(value === true)}
       />
       <label className="auth-legal-copy" htmlFor={id}>
         我已阅读并同意{links}
       </label>
     </div>
-  ) : (
-    <p className="auth-legal">登录前请阅读{links}。</p>
   );
 }

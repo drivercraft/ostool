@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { api, notifyAuthChanged, type HumanProof } from "@/api/client";
 import { HumanVerification } from "@/components/human-verification";
-import { useEdition } from "@/edition";
 import { safeAdminRedirect } from "@/auth-session";
 import { ThemeMenu } from "@/components/theme-menu";
 import { Button } from "@/components/ui/button";
@@ -21,8 +20,9 @@ import { TextField } from "@/components/forms";
 export default function AdminLogin() {
   const [email, setEmail] = useState(""),
     [password, setPassword] = useState("");
-  const config = useEdition();
-  const { settings } = useSiteSettings();
+  const { settings, terms_version, privacy_version } = useSiteSettings();
+  const [accepted, setAccepted] = useState(false);
+  useEffect(() => setAccepted(false), [terms_version, privacy_version]);
   const [proof, setProof] = useState<HumanProof>();
   const [refreshKey, setRefreshKey] = useState(0);
   const [challenge, setChallenge] = useState<string>();
@@ -34,6 +34,10 @@ export default function AdminLogin() {
   }, []);
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!accepted) {
+      setError("请阅读并同意用户协议和隐私政策");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -198,10 +202,16 @@ export default function AdminLogin() {
                 />
               )}
               {error && <MessageToast message={error} />}
-              {!challenge && <AuthLegal />}
+              <AuthLegal
+                accepted={accepted}
+                onChange={setAccepted}
+                disabled={busy}
+              />
               <Button
                 type="submit"
-                disabled={busy || (!challenge && !proof?.captcha_code)}
+                disabled={
+                  busy || !accepted || (!challenge && !proof?.captcha_code)
+                }
               >
                 {busy ? "正在登录…" : challenge ? "验证并登录" : "登录"}
                 <ArrowRight size={17} />
@@ -219,10 +229,7 @@ export default function AdminLogin() {
                   重新登录
                 </Button>
               )}
-              {(config.password_reset_available ??
-                config.email_security_available) && (
-                <a href="/password-reset?surface=admin">忘记密码</a>
-              )}
+              <a href="/password-reset?surface=admin">忘记密码？</a>
               <a className="auth-form-site" href="/">
                 返回网站首页
               </a>
