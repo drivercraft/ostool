@@ -27,8 +27,9 @@ dev_usage() {
   build                     仅构建 release 镜像
   check                     检查 Compose 与访问配置，不启动容器
   status                    显示容器状态
-  logs [服务]               查看最近日志，可指定 server、postgres、redis、caddy
+  logs [服务]               查看最近日志，可指定 server、postgres、redis、caddy、demo-devices
   seed                      独立导入预置业务数据，然后重启后端
+  demo                      启动本机设备模拟器，导入可申请的演示设备并重启后端
   cert                      导出 public 模式内部 CA 根证书
   help, -h, --help          显示使用说明
 
@@ -58,7 +59,7 @@ dev_parse_args() {
     ACTION=$1; shift
     case $ACTION in
         help|-h|--help) dev_usage; exit 0;;
-        start|stop|restart|build|check|status|logs|seed|cert) ;;
+        start|stop|restart|build|check|status|logs|seed|demo|cert) ;;
         *) printf '[错误] 未知命令：%s；使用 --help 查看说明。\n' "$ACTION" >&2; exit 2;;
     esac
     while (($#)); do
@@ -74,7 +75,7 @@ dev_parse_args() {
         esac
     done
     if [[ -n $LOG_SERVICE ]]; then
-        case $LOG_SERVICE in server|postgres|redis|caddy) ;; *) printf '[错误] 未知服务：%s\n' "$LOG_SERVICE" >&2; exit 2;; esac
+        case $LOG_SERVICE in server|postgres|redis|caddy|demo-devices) ;; *) printf '[错误] 未知服务：%s\n' "$LOG_SERVICE" >&2; exit 2;; esac
     fi
 }
 
@@ -87,9 +88,10 @@ dev_prepare() {
     export OSTOOL_ENV_FILE=$ENV_FILE
     # profile 由当前入口选择，不继承其他 Compose 项目的终端设置。
     export COMPOSE_PROFILES=
-    COMPOSE=(docker compose --project-name ostool-server --env-file "$ENV_FILE" -f "$SERVER_DIR/deploy/compose.yaml")
+    COMPOSE=(docker compose --project-name ostool-server --env-file "$ENV_FILE" -f "$SERVER_DIR/deploy/compose.yaml" -f "$SERVER_DIR/deploy/compose.demo.yaml")
     for file in "${COMPOSE_FILES[@]}"; do COMPOSE+=(-f "$file"); done
-    ALL_COMPOSE=("${COMPOSE[@]}" --profile gateway)
+    ALL_COMPOSE=("${COMPOSE[@]}" --profile gateway --profile demo)
+    if [[ $ACTION == demo ]]; then COMPOSE+=(--profile demo); fi
     local resolved line edition=local origin= allowed= listener=127.0.0.1:2999 site
     local sites=()
     resolved=$("${COMPOSE[@]}" config --environment)
@@ -104,7 +106,7 @@ dev_prepare() {
     EDITION=$edition
     case $edition in
         public)
-            if [[ $ACTION == start || $ACTION == restart || $ACTION == check || $ACTION == seed ]]; then
+            if [[ $ACTION == start || $ACTION == restart || $ACTION == check || $ACTION == seed || $ACTION == demo ]]; then
                 [[ $origin == https://* && $listener =~ ^127\.0\.0\.1:[0-9]+$ ]] || { printf '[错误] public 模式需要 HTTPS 主站地址和 127.0.0.1 API 监听地址。\n' >&2; exit 1; }
             fi
             OSTOOL_GATEWAY_SITES=$origin
@@ -149,6 +151,15 @@ dev_run() {
             "${COMPOSE[@]}" run --build --rm --no-deps --entrypoint ostool-server-seed-demo server --env-file /dev/null
             "${COMPOSE[@]}" up -d --wait
             printf '[完成] 预置业务数据已导入，已有记录保留。\n';;
+        demo)
+            if [[ $EDITION == local ]]; then "${ALL_COMPOSE[@]}" stop caddy; fi
+            "${COMPOSE[@]}" build server
+            "${COMPOSE[@]}" up -d --wait postgres redis demo-devices
+            "${COMPOSE[@]}" stop server
+            "${COMPOSE[@]}" run --rm --no-deps --entrypoint ostool-server-seed-demo server --env-file /dev/null --simulate-devices
+            "${COMPOSE[@]}" up -d --wait --force-recreate server
+            "${COMPOSE[@]}" up -d --wait
+            printf '[完成] 演示设备已连接本机模拟器；支持真实租赁流程与模拟电源，不执行内核、串口或 OTA。\n';;
         cert)
             [[ $EDITION == public ]] || { printf '[信息] local 使用 HTTP，无需证书。\n'; return; }
             mkdir -p "$SERVER_DIR/.ostool-server-dev"

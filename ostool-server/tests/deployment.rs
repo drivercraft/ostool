@@ -137,7 +137,7 @@ if [[ " $* " == *' config --environment '* ]]; then cat "$OSTOOL_ENV_FILE"; fi
         let trace = root.path().join(format!("{edition}.trace"));
         let listener = "127.0.0.1:2999";
         fs::write(&env_file,format!("OSTOOL_EDITION={edition}\nOSTOOL_LISTEN_ADDR={listener}\nOSTOOL_PUBLIC_BASE_URL=https://127.0.0.1:3443\nOSTOOL_ALLOWED_ORIGINS=https://localhost:3443,https://192.0.2.10:3443\nOSTOOL_ADMIN_PASSWORD=private-test-value\n")).unwrap();
-        for action in ["start", "restart", "check", "logs", "seed", "stop"] {
+        for action in ["start", "restart", "check", "logs", "seed", "demo", "stop"] {
             let mut command = Command::new(concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/dev.sh"));
             command.arg(action).arg("--env-file").arg(&env_file);
             if action == "logs" {
@@ -164,6 +164,9 @@ if [[ " $* " == *' config --environment '* ]]; then cat "$OSTOOL_ENV_FILE"; fi
         assert!(trace.contains("<build>") || trace.contains("<--build>"));
         assert!(trace.contains("<--force-recreate>"));
         assert!(trace.contains("<--entrypoint> <ostool-server-seed-demo>"));
+        assert!(trace.contains("<--simulate-devices>"));
+        assert!(trace.contains("<demo-devices>"));
+        assert!(trace.contains("compose.demo.yaml"));
         assert!(trace.contains("<logs> <--tail> <100> <server>"));
         assert!(!trace.contains("unexpected-profile"));
         assert!(!trace.contains("--dev-demo"));
@@ -175,7 +178,7 @@ if [[ " $* " == *' config --environment '* ]]; then cat "$OSTOOL_ENV_FILE"; fi
             ));
         }
         if edition == "local" {
-            assert!(trace.contains("<--profile> <gateway> <stop> <caddy>"));
+            assert!(trace.contains("<--profile> <gateway> <--profile> <demo> <stop> <caddy>"));
         }
     }
 }

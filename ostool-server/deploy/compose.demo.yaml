@@ -1,0 +1,17 @@
+# Only dev.sh includes this overlay. Production Compose never starts a simulator.
+services:
+  demo-devices:
+    image: ostool-server:release
+    profiles: [demo]
+    entrypoint: [ostool-server-seed-demo]
+    command: [--serve-devices]
+    network_mode: host
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: [CMD, curl, --fail, --silent, http://127.0.0.1:31000/health]
+      interval: 3s
+      timeout: 2s
+      retries: 10
+    restart: unless-stopped

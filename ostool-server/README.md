@@ -337,6 +337,28 @@ exports the Docker gateway CA for the client to trust. The Docker project and da
 volumes are shared with `deploy.sh docker`; do not manage the same environment
 concurrently through both commands.
 
+For page and rental demonstrations without hardware, run:
+
+```bash
+ostool-server/scripts/dev.sh demo
+```
+
+This builds the release image and starts a separate loopback device simulator using
+`deploy/compose.demo.yaml`, which production deployment does not load. It upgrades
+untouched example drafts to HTTPboot devices on `127.0.0.1:31000–31047`, preserving
+edited inventory and existing real endpoints. Four maintenance boards remain disabled;
+other examples support rental applications, with automatic approval enabled on selected
+boards and granted to the example kernel-engineer role. Login, approval, scheduling,
+same-type concurrency, ownership and expiration use the normal server behavior.
+Power commands call the simulator: powered-off devices fail status requests, and
+power restoration changes their boot epoch. Normal device polling controls online
+status; it is not forced by the seed. Simulator restarts restore power to all devices.
+The server retains its normal startup power-off policy; use the existing power-on
+action to bring a demo board online.
+Kernel execution, serial and OTA are unsupported and fail explicitly. Stop with
+`dev.sh stop`; resume with `dev.sh demo`. Imported users have random passwords;
+set a password through user management to test their login.
+
 The launcher reads `ostool-server/.env` through Compose, independent of the working
 directory. Deployment ignores caller `OSTOOL_*` variables, so the selected file
 is the single source for both Compose and the server.

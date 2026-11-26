@@ -10,6 +10,8 @@ use rand::RngCore;
 use std::path::PathBuf;
 use uuid::Uuid;
 
+mod demo_devices;
+
 const BOARD_COUNT: usize = 48;
 const DTB_COUNT: usize = 24;
 const PEOPLE: [(&str, &str); 36] = [
@@ -131,21 +133,55 @@ const PURPOSES: [&str; 8] = [
 struct Cli {
     #[arg(long)]
     env_file: Option<PathBuf>,
+    /// Connect untouched example inventory to the local demo device simulator.
+    #[arg(long, conflicts_with = "serve_devices")]
+    simulate_devices: bool,
+    /// Serve loopback-only demo devices; no database access or physical hardware.
+    #[arg(long)]
+    serve_devices: bool,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    if cli.serve_devices {
+        return demo_devices::serve().await;
+    }
     let config = ostool_server::environment::load(cli.env_file.as_deref())?;
     let db = Database::connect(&config.database).await?;
     let boards = BoardStore::new(db.clone());
     let dtbs = DtbStore::new(db.clone());
     let existing = boards.load_all().await?;
     for index in 0..BOARD_COUNT {
-        let item = prepared_board(index, &config);
+        let original = prepared_board(index, &config);
+        let item = if cli.simulate_devices {
+            simulated_board(index)
+        } else {
+            original.clone()
+        };
         item.validate()?;
-        if !existing.contains_key(&item.id) {
+        let untouched = if let Some(current) = existing.get(&item.id) {
+            serde_json::to_value(current)? == serde_json::to_value(&original)?
+        } else {
+            false
+        };
+        let endpoint = demo_devices::endpoint(index);
+        let connection: Option<String> =
+            sqlx::query_scalar("SELECT endpoint FROM device_connections WHERE board_id=$1")
+                .bind(&item.id)
+                .fetch_optional(db.pool())
+                .await?;
+        let replace_draft = cli.simulate_devices
+            && untouched
+            && connection.as_ref().is_none_or(|value| value == &endpoint);
+        if !existing.contains_key(&item.id) || replace_draft {
             boards.write_board(&item).await?;
+            if cli.simulate_devices {
+                sqlx::query("INSERT INTO device_connections(board_id,endpoint) VALUES($1,$2) ON CONFLICT DO NOTHING")
+                    .bind(&item.id).bind(&endpoint).execute(db.pool()).await?;
+            }
+        }
+        if !existing.contains_key(&item.id) {
             sqlx::query("UPDATE board_records SET created_at=$2,updated_at=$3 WHERE id=$1")
                 .bind(&item.id)
                 .bind(Utc::now() - Duration::days(365 - index as i64))
@@ -167,13 +203,19 @@ async fn main() -> anyhow::Result<()> {
     }
     if config.auth.enabled {
         db.bootstrap_admin(&config.auth).await?;
-        seed_identity(&db).await?;
+        seed_identity(&db, cli.simulate_devices).await?;
     }
     println!("设备、人员、租赁及使用记录已导入；已有记录保持不变。");
     println!("管理员登录信息保持不变。预置人员使用独立随机密码，可在用户管理中设置登录密码。");
-    println!(
-        "缺少串口或设备接入配置的示例开发板按禁用草稿导入，配置真实设备后再启用；不会改写已有开发板。"
-    );
+    if cli.simulate_devices {
+        println!(
+            "演示设备使用本机 HTTP 模拟器；仅升级未修改的示例草稿，保留自定义设备与接入地址。维护中的 4 台设备仍禁用。模拟器不执行内核、串口或 OTA。"
+        );
+    } else {
+        println!(
+            "缺少串口或设备接入配置的示例开发板按禁用草稿导入，配置真实设备后再启用；不会改写已有开发板。"
+        );
+    }
     Ok(())
 }
 
@@ -189,6 +231,29 @@ fn prepared_board(index: usize, config: &ostool_server::ServerConfig) -> BoardCo
         _ => false,
     };
     item.disabled |= missing_connection;
+    item
+}
+
+fn simulated_board(index: usize) -> BoardConfig {
+    let mut item = board(index);
+    item.boot = BootConfig::UefiHttp(UefiHttpProfile {
+        serial_parameters: None,
+    });
+    item.allow_instant_use = index.is_multiple_of(2);
+    item.tags.push("本机模拟".into());
+    item.notes = Some(format!(
+        "{}\n演示设备：仅模拟在线与电源，不执行内核、串口或 OTA。",
+        item.notes.unwrap_or_default()
+    ));
+    let endpoint = demo_devices::endpoint(index);
+    item.power_management = PowerManagementConfig::Custom(CustomPowerManagement {
+        power_on_cmd: format!(
+            "curl --fail --silent --show-error --request POST {endpoint}/demo/power/on"
+        ),
+        power_off_cmd: format!(
+            "curl --fail --silent --show-error --request POST {endpoint}/demo/power/off"
+        ),
+    });
     item
 }
 
@@ -235,14 +300,7 @@ fn board(index: usize) -> BoardConfig {
             ["内核研发", "驱动开发", "版本回归", "课程教学"][index % 4].into(),
         ],
         network_identity: Some(BoardNetworkIdentity {
-            mac_address: format!(
-                "02:74:6c:{:02x}:{:02x}:{:02x}",
-                model_index + 1,
-                number,
-                0x20 + index
-            )
-            .parse()
-            .expect("valid inventory MAC"),
+            mac_address: demo_devices::mac(index),
         }),
         notes: Some(format!(
             "型号：{model}\n位置：{zone} 区 / 机架 {:02} / 槽位 {number:02}\n负责人：{}\n用途：{}{}",
@@ -275,7 +333,7 @@ fn password_hash() -> anyhow::Result<String> {
         .to_string())
 }
 
-async fn seed_identity(db: &Database) -> anyhow::Result<()> {
+async fn seed_identity(db: &Database, simulate_devices: bool) -> anyhow::Result<()> {
     let now = Utc::now();
     // 北京时间 09:00，日历中的预约从工作日常用时段开始。
     let day = (now + Duration::hours(8))
@@ -287,6 +345,11 @@ async fn seed_identity(db: &Database) -> anyhow::Result<()> {
     for (index, (id, name, description)) in ROLES.iter().enumerate() {
         sqlx::query("INSERT INTO roles(id,code,name,description,administrator,permissions,created_at,updated_at) VALUES($1,$1,$2,$3,$4,CASE WHEN $4 THEN ARRAY['system.admin'] ELSE ARRAY['board.use','rental.request'] END,now()-interval '200 days',now()-interval '30 days') ON CONFLICT DO NOTHING")
             .bind(id).bind(name).bind(description).bind(index == 0).execute(&mut *tx).await?;
+    }
+    if simulate_devices {
+        // Give one example role automatic approval; preserve edited permission sets.
+        sqlx::query("UPDATE roles SET permissions=ARRAY['board.instant','board.use','rental.request'] WHERE id='kernel-engineer' AND permissions=ARRAY['board.use','rental.request']")
+            .execute(&mut *tx).await?;
     }
     for (index, (username, name)) in PEOPLE.iter().enumerate() {
         let age = if (30..34).contains(&index) {
